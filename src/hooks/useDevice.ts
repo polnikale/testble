@@ -1,4 +1,5 @@
-import {useCallback, useRef, useState} from 'react';
+import {differenceInMilliseconds} from 'date-fns';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {BleManager, Device} from 'react-native-ble-plx';
 import SPDevice, {
   DeviceType,
@@ -29,16 +30,57 @@ const useDevice = (manager: BleManager) => {
 
   const [isConnected, setConnected] = useState(false);
   const [data, setData] = useState<IData | undefined>();
+  const [isStarted, setStarted] = useState(false);
+  const [uniqueField, setUniqueField] = useState(1);
 
-  const onConnectionChange = useCallback(setConnected, [setConnected]);
-  const onDataChange = setData;
-  const onUniqueFieldChange = console.log;
+  const previousTickDate = useRef<Date>();
+  const [millisecondsSpent, setMillisecondsSpent] = useState(0);
+
+  const onUniqueFieldChangeRequest = (d: number) => {
+    currentDevice.current.changeUniqueField(d);
+  };
+
+  const onChangeData = useCallback<(newData: IData) => void>(
+    (newData) => {
+      setData(newData);
+      if (previousTickDate.current) {
+        setMillisecondsSpent(
+          (prevSpent) =>
+            prevSpent +
+            differenceInMilliseconds(
+              new Date(),
+              previousTickDate.current ?? new Date(),
+            ),
+        );
+      }
+      previousTickDate.current = isStarted ? new Date() : undefined;
+    },
+    [isStarted],
+  );
+
+  useEffect(() => {
+    currentDevice.current.onDataChange = onChangeData;
+  }, [onChangeData]);
+
+  const onChangeConnected = useCallback<(newConnected: boolean) => void>(
+    (newConnected) => {
+      setConnected(newConnected);
+
+      if (!newConnected) {
+        previousTickDate.current = undefined;
+        setMillisecondsSpent(0);
+      }
+    },
+    [],
+  );
 
   const currentDevice = useRef(
     new SPDevice(
-      onConnectionChange,
-      onDataChange,
-      onUniqueFieldChange,
+      onChangeConnected,
+      onChangeData,
+      setUniqueField,
+      onUniqueFieldChangeRequest,
+      setStarted,
       DEVICES_MOCK,
       false,
       80,
@@ -156,6 +198,9 @@ const useDevice = (manager: BleManager) => {
     currentDevice,
     isConnected,
     data,
+    millisecondsSpent,
+    isStarted,
+    uniqueField,
   };
 };
 

@@ -38,9 +38,27 @@ export interface IData {
   distance: number;
   calories: number;
   heartRate?: number;
-  pulse?: number;
   watt: number;
-  uniqueFields: number[];
+  rpm: number;
+  speed: number;
+}
+
+interface Position {
+  lowByte: number;
+  highByte?: number;
+  highByteMultiplier?: number;
+  lowByteMultiplier?: number;
+  byte?: BytePosition[];
+}
+
+interface BytePosition {
+  index: number;
+  value: number | BitPosition[];
+}
+
+interface BitPosition {
+  index: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  value: 1 | 0;
 }
 
 // the last value is checksum
@@ -48,6 +66,7 @@ const createByteArray = (values: number[]) =>
   Uint8Array.from([...values, R.sum(values)]);
 
 type OnConnectionChange = (isConnected: boolean) => void;
+type OnStartedChange = (isStarted: boolean) => void;
 type OnDataChange = (data: IData) => void;
 type OnUniqueFieldChange = (resistance: number) => void;
 
@@ -60,22 +79,109 @@ export default class SPDevice {
   private availableBackendDevices: IDevice[];
 
   private weight?: number;
+  private heartRate = 0;
+  private rpm = 0;
+  private distance = 0;
+  private calories = 0;
+  private watt = 0;
+  private speed = 0;
 
-  private HEART_RATE_INDEX = 8;
+  private HEART_RATE_POSITION: Position = {
+    lowByte: 8,
+    byte: [
+      {
+        index: 1,
+        value: 48,
+      },
+    ],
+  };
+  private UNIQUE_FIELD_POSITION: Position = {
+    lowByte: 10,
+    byte: [
+      {
+        index: 1,
+        value: 112,
+      },
+      {index: 0, value: CharacteristicType.WORKOUT},
+    ],
+  };
 
-  private uniqueField?: number;
+  private DISTANCE_POSITION: Position = {
+    lowByte: 5,
+    lowByteMultiplier: 10,
+    highByte: 4,
+    highByteMultiplier: 1000,
+    byte: [
+      {
+        index: 1,
+        value: 48,
+      },
+    ],
+  };
 
-  private onConnectionChange: OnConnectionChange;
-  private onDataChange: OnDataChange;
-  private onUniqueFieldChange: OnUniqueFieldChange;
+  private CALORIES_POSITION: Position = {
+    lowByte: 7,
+    highByte: 6,
+    highByteMultiplier: 100,
+    byte: [
+      {
+        index: 1,
+        value: 48,
+      },
+    ],
+  };
+
+  private SPEED_POSITION: Position = {
+    lowByte: 3,
+    lowByteMultiplier: 100,
+    highByte: 2,
+    highByteMultiplier: 10000,
+    byte: [
+      {
+        index: 1,
+        value: [
+          {
+            index: 1,
+            value: 0,
+          },
+        ],
+      },
+    ],
+  };
+
+  private RPM_POSITION: Position = {
+    lowByte: 3,
+    highByte: 2,
+    byte: [
+      {
+        index: 1,
+        value: [
+          {
+            index: 1,
+            value: 1,
+          },
+        ],
+      },
+    ],
+  };
+
+  public uniqueField?: number;
+
+  public onConnectionChange: OnConnectionChange;
+  public onDataChange: OnDataChange;
+  public onUniqueFieldChange: OnUniqueFieldChange;
+  public onUniqueFieldChangeRequest: OnUniqueFieldChange;
+  public onStartedChange: OnStartedChange;
   private dataInterval?: number;
-  private isStarted: boolean;
+  public isStarted: boolean;
   public isConnected: boolean = false;
 
   constructor(
     onConnectionChange: OnConnectionChange,
     onDataChange: OnDataChange,
     onUniqueFieldChange: OnUniqueFieldChange,
+    onUniqueFieldChangeRequest: OnUniqueFieldChange,
+    onStartedChange: OnStartedChange,
     availableDevices: IDevice[],
     isStarted: boolean = false,
     weight?: number,
@@ -84,6 +190,8 @@ export default class SPDevice {
     this.onConnectionChange = onConnectionChange;
     this.onDataChange = onDataChange;
     this.onUniqueFieldChange = onUniqueFieldChange;
+    this.onUniqueFieldChangeRequest = onUniqueFieldChangeRequest;
+    this.onStartedChange = onStartedChange;
     this.isStarted = isStarted;
     this.weight = weight;
   }
@@ -92,9 +200,9 @@ export default class SPDevice {
     return this.sendData([
       CharacteristicType.WORKOUT,
       this.isStarted ? 0x01 : 0x00,
-      this.uniqueField ?? 0,
+      this.uniqueField ?? 1,
       0x00,
-    ]).catch((err) => {
+    ])?.catch((err) => {
       console.error('error', err);
       if (this.dataInterval) {
         clearInterval(this.dataInterval);
@@ -105,13 +213,13 @@ export default class SPDevice {
 
   private sendData = (data: number[]) => {
     if (!this.isConnected) {
-      return Promise.reject();
+      return;
     }
     if (!this.characteristic) {
-      return Promise.reject();
+      return;
     }
     if (!this.device) {
-      return Promise.reject();
+      return;
     }
 
     const payload = createByteArray(data);
@@ -163,7 +271,7 @@ export default class SPDevice {
         this.changeWeight(this.weight);
       }
 
-      this.dataInterval = setInterval(this.sendWorkoutData.bind(this), 50);
+      this.dataInterval = setInterval(this.sendWorkoutData.bind(this), 100);
 
       this.characteristicListener = this.characteristic?.monitor(
         this.handleMonitor.bind(this),
@@ -184,14 +292,17 @@ export default class SPDevice {
   };
 
   public disconnect = async () => {
-    if (this.characteristicListener) {
-      this.characteristicListener.remove();
+    try {
+      if (this.characteristicListener) {
+        this.characteristicListener.remove();
+      }
+      if (this.disconnectListener) {
+        this.disconnectListener.remove();
+      }
+      await this.device?.cancelConnection();
+    } catch (error) {
+      console.error('Disconnect failed');
     }
-
-    if (this.disconnectListener) {
-      this.disconnectListener.remove();
-    }
-    await this.device?.cancelConnection();
     this.handleDisconnect();
     this.clearDevice();
   };
@@ -208,11 +319,11 @@ export default class SPDevice {
     if (err) {
       console.error('monitor', err);
 
+      this.disconnect();
+
       return;
     }
-    // 2 options here:
-    // 1: [32, UNKNOWN, UNKNWON, UNKNOWN, CHECKSUM]
-    // 2: [32, StatusByte, Speed-H/ Counts-H/ rpm-H, Speed-L/Counts-L/ rpm-L, Distance H, Distance L, Calories-H, Calories-L, PulseWattH / Status2, WattL/Incline]
+
     if (
       !characteristic ||
       !this.characteristic ||
@@ -229,17 +340,77 @@ export default class SPDevice {
 
     const characteristicArray = base64.toByteArray(characteristic.value);
 
-    if (characteristicArray.length > 4) {
-      // UNKNOWN CASE
-    } else {
-      this.onDataChange({
-        heartRate: characteristicArray[this.HEART_RATE_INDEX],
-        distance: 0,
-        calories: 0,
-        watt: 0,
-        uniqueFields: [],
-      });
+    const newUniqueField = this.getNewValue(
+      characteristicArray,
+      this.UNIQUE_FIELD_POSITION,
+    );
+
+    if (newUniqueField && newUniqueField !== this.uniqueField) {
+      this.onUniqueFieldChangeRequest(newUniqueField);
     }
+    console.log('characteristic', characteristicArray);
+
+    this.heartRate =
+      this.getNewValue(characteristicArray, this.HEART_RATE_POSITION) ??
+      this.heartRate;
+
+    this.distance =
+      this.getNewValue(characteristicArray, this.DISTANCE_POSITION) ??
+      this.distance;
+
+    this.calories =
+      this.getNewValue(characteristicArray, this.CALORIES_POSITION) ??
+      this.calories;
+
+    this.speed =
+      this.getNewValue(characteristicArray, this.SPEED_POSITION) ?? this.speed;
+
+    this.rpm =
+      this.getNewValue(characteristicArray, this.RPM_POSITION) ?? this.rpm;
+
+    console.log('valuesL', this.heartRate, this.distance, this.calories);
+
+    this.onDataChange({
+      heartRate: this.heartRate,
+      distance: this.distance,
+      calories: this.calories,
+      watt: this.watt,
+      rpm: this.rpm,
+      speed: this.speed,
+    });
+  };
+
+  private getNewValue = (characteristics: Uint8Array, position: Position) => {
+    if (
+      position.byte?.every((rule) =>
+        Array.isArray(rule.value)
+          ? rule.value.every(
+              (bitRule) =>
+                Number(
+                  characteristics[rule.index]?.toString(2)?.[bitRule.index],
+                ) === bitRule.value,
+            )
+          : rule.value === characteristics?.[rule.index],
+      ) ??
+      true
+    ) {
+      const lowerValue = ByteNumber.to16(characteristics[position.lowByte]);
+
+      const fullLowerValue = lowerValue * (position.lowByteMultiplier ?? 1);
+
+      const higherValue = ByteNumber.to16(
+        characteristics[position.highByte ?? -1],
+      );
+
+      const fullHigherValue = higherValue * (position.highByteMultiplier ?? 1);
+
+      if (fullHigherValue + fullLowerValue === null) {
+        console.log('NULL:', fullHigherValue + fullLowerValue);
+      }
+
+      return fullLowerValue + fullHigherValue;
+    }
+    return undefined;
   };
 
   public changeWeight = (weight: number) => {
@@ -252,8 +423,14 @@ export default class SPDevice {
     ]);
   };
 
+  public changeStarted = (isStarted: boolean) => {
+    this.isStarted = isStarted;
+    this.onStartedChange(isStarted);
+  };
+
   public changeUniqueField = (uniqueField: number) => {
     this.uniqueField = uniqueField;
+    this.onUniqueFieldChange(uniqueField);
   };
 }
 
@@ -269,6 +446,8 @@ class ByteNumber {
 
   static fromBytes = ([higherByte, lowerByte]: [number, number]) =>
     (higherByte << 8) | lowerByte;
+
+  static to16 = (number = 0) => Number(Number(number).toString(16));
 }
 
 declare function setInterval(
