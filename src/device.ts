@@ -12,6 +12,7 @@ export enum DeviceUniqueField {
   RESISTANCE = 'RESISTANCE',
   INCLINE = 'INCLINE',
   SPEED = 'SPEED',
+  COUNT = 'COUNT',
 }
 
 export enum DeviceType {
@@ -19,7 +20,7 @@ export enum DeviceType {
   XBIKE = 'XBIKE',
 }
 
-enum CharacteristicType {
+export enum CharacteristicType {
   WORKOUT = 0x20,
   WEIGHT = 0x40,
 }
@@ -29,7 +30,7 @@ const LBS_IN_KG = 2.20462;
 export interface IDevice {
   id: string;
   characteristicId: string;
-  uniqueFields: DeviceUniqueField[];
+  uniqueFields: Record<string, UniqueField>;
   type: DeviceType;
   hasHeartRate?: boolean;
 }
@@ -40,7 +41,6 @@ export interface IData {
   heartRate?: number;
   watt: number;
   rpm: number;
-  speed: number;
 }
 
 interface Position {
@@ -49,7 +49,19 @@ interface Position {
   highByteMultiplier?: number;
   lowByteMultiplier?: number;
   byte?: BytePosition[];
+  accumulative?: boolean;
 }
+
+export interface UniqueField {
+  type: DeviceUniqueField;
+  value?: number;
+  get: Position;
+  set?: {
+    byte: number;
+  };
+}
+
+type Tuple<T1, T2> = [T1, T2];
 
 interface BytePosition {
   index: number;
@@ -68,10 +80,13 @@ const createByteArray = (values: number[]) =>
 type OnConnectionChange = (isConnected: boolean) => void;
 type OnStartedChange = (isStarted: boolean) => void;
 type OnDataChange = (data: IData) => void;
-type OnUniqueFieldChange = (resistance: number) => void;
+export type OnDeviceChoose = (device: IDevice) => void;
+export type OnUniqueFieldChange = (id: string, value: number) => void;
+export type OnDisconnect = () => void;
 
 export default class SPDevice {
   public device?: Device;
+  private uniqueFields?: Record<string, UniqueField>;
   private characteristic?: Characteristic;
   private characteristicListener?: Subscription;
   private disconnectListener?: Subscription;
@@ -84,7 +99,8 @@ export default class SPDevice {
   private distance = 0;
   private calories = 0;
   private watt = 0;
-  private speed = 0;
+
+  private NOTIIFCATION_INTERVAL = 1000;
 
   private HEART_RATE_POSITION: Position = {
     lowByte: 8,
@@ -93,16 +109,6 @@ export default class SPDevice {
         index: 1,
         value: 48,
       },
-    ],
-  };
-  private UNIQUE_FIELD_POSITION: Position = {
-    lowByte: 10,
-    byte: [
-      {
-        index: 1,
-        value: 112,
-      },
-      {index: 0, value: CharacteristicType.WORKOUT},
     ],
   };
 
@@ -117,6 +123,7 @@ export default class SPDevice {
         value: 48,
       },
     ],
+    accumulative: false,
   };
 
   private CALORIES_POSITION: Position = {
@@ -129,24 +136,7 @@ export default class SPDevice {
         value: 48,
       },
     ],
-  };
-
-  private SPEED_POSITION: Position = {
-    lowByte: 3,
-    lowByteMultiplier: 100,
-    highByte: 2,
-    highByteMultiplier: 10000,
-    byte: [
-      {
-        index: 1,
-        value: [
-          {
-            index: 1,
-            value: 0,
-          },
-        ],
-      },
-    ],
+    accumulative: false,
   };
 
   private RPM_POSITION: Position = {
@@ -165,13 +155,13 @@ export default class SPDevice {
     ],
   };
 
-  public uniqueField?: number;
-
   public onConnectionChange: OnConnectionChange;
   public onDataChange: OnDataChange;
   public onUniqueFieldChange: OnUniqueFieldChange;
   public onUniqueFieldChangeRequest: OnUniqueFieldChange;
   public onStartedChange: OnStartedChange;
+  public onDeviceChoose: OnDeviceChoose;
+  public onDisconnect: OnDisconnect;
   private dataInterval?: number;
   public isStarted: boolean;
   public isConnected: boolean = false;
@@ -182,6 +172,8 @@ export default class SPDevice {
     onUniqueFieldChange: OnUniqueFieldChange,
     onUniqueFieldChangeRequest: OnUniqueFieldChange,
     onStartedChange: OnStartedChange,
+    onDeviceChoose: OnDeviceChoose,
+    onDisconnect: OnDisconnect,
     availableDevices: IDevice[],
     isStarted: boolean = false,
     weight?: number,
@@ -192,21 +184,31 @@ export default class SPDevice {
     this.onUniqueFieldChange = onUniqueFieldChange;
     this.onUniqueFieldChangeRequest = onUniqueFieldChangeRequest;
     this.onStartedChange = onStartedChange;
+    this.onDeviceChoose = onDeviceChoose;
+    this.onDisconnect = onDisconnect;
     this.isStarted = isStarted;
     this.weight = weight;
   }
 
   private sendWorkoutData = () => {
-    return this.sendData([
+    const baseData = [
       CharacteristicType.WORKOUT,
       this.isStarted ? 0x01 : 0x00,
-      this.uniqueField ?? 1,
       0x00,
-    ])?.catch((err) => {
+      0x00,
+    ];
+
+    R.values(this.uniqueFields ?? {}).forEach(({set, value}) => {
+      if (set) {
+        baseData[set.byte] = value ?? 1;
+      }
+    });
+    return this.sendData(baseData)?.catch((err) => {
       console.error('error', err);
       if (this.dataInterval) {
         clearInterval(this.dataInterval);
         this.dataInterval = undefined;
+        this.disconnect();
       }
     });
   };
@@ -235,6 +237,7 @@ export default class SPDevice {
         // if ids match - we need to disconnect the devices
         await this.disconnect();
       }
+      console.log('this', this.availableBackendDevices);
 
       const backendDevice = this.availableBackendDevices.find(
         (availableDevice) => availableDevice.id === device.id,
@@ -245,12 +248,14 @@ export default class SPDevice {
       }
 
       this.device = device;
+      this.uniqueFields = {...backendDevice.uniqueFields};
       this.backendDevice = backendDevice;
 
       await this.device.connect();
       await this.device.requestConnectionPriority(ConnectionPriority.High);
 
       await this.device.discoverAllServicesAndCharacteristics();
+      this.onDeviceChoose(backendDevice);
 
       const services = await this.device.services();
 
@@ -271,13 +276,16 @@ export default class SPDevice {
         this.changeWeight(this.weight);
       }
 
-      this.dataInterval = setInterval(this.sendWorkoutData.bind(this), 100);
+      this.dataInterval = setInterval(
+        this.sendWorkoutData.bind(this),
+        this.NOTIIFCATION_INTERVAL,
+      );
 
       this.characteristicListener = this.characteristic?.monitor(
         this.handleMonitor.bind(this),
       );
     } catch (error) {
-      console.error('Connection failed');
+      console.error('Connection failed', error);
     }
   };
 
@@ -302,14 +310,17 @@ export default class SPDevice {
       await this.device?.cancelConnection();
     } catch (error) {
       console.error('Disconnect failed');
+    } finally {
+      this.handleDisconnect();
+      this.clearDevice();
+      this.onDisconnect();
     }
-    this.handleDisconnect();
-    this.clearDevice();
   };
 
   private clearDevice = () => {
     this.device = undefined;
     this.backendDevice = undefined;
+    this.uniqueFields = undefined;
   };
 
   private handleMonitor = (
@@ -340,35 +351,56 @@ export default class SPDevice {
 
     const characteristicArray = base64.toByteArray(characteristic.value);
 
-    const newUniqueField = this.getNewValue(
-      characteristicArray,
-      this.UNIQUE_FIELD_POSITION,
-    );
+    const newUniqueFields: Tuple<string, UniqueField>[] = Object.entries(
+      this.uniqueFields ?? {},
+    ).map(([id, uniqueField]) => [
+      id,
+      R.assoc(
+        'value',
+        this.getNewValue(
+          characteristicArray,
+          uniqueField.get,
+          uniqueField.value,
+        ),
+        uniqueField,
+      ),
+    ]);
 
-    if (newUniqueField && newUniqueField !== this.uniqueField) {
-      this.onUniqueFieldChangeRequest(newUniqueField);
-    }
-    console.log('characteristic', characteristicArray);
+    newUniqueFields.forEach(([id, newUniqueField]) => {
+      if (
+        newUniqueField.value !== undefined &&
+        newUniqueField.value !== this.uniqueFields?.[id]?.value
+      ) {
+        this.onUniqueFieldChangeRequest(id, newUniqueField.value);
+      }
+    });
+
+    console.log(
+      'characteristics',
+      characteristicArray,
+      newUniqueFields.map((a) => a[1].value),
+    );
 
     this.heartRate =
       this.getNewValue(characteristicArray, this.HEART_RATE_POSITION) ??
       this.heartRate;
 
     this.distance =
-      this.getNewValue(characteristicArray, this.DISTANCE_POSITION) ??
-      this.distance;
+      this.getNewValue(
+        characteristicArray,
+        this.DISTANCE_POSITION,
+        this.distance,
+      ) ?? this.distance;
 
     this.calories =
-      this.getNewValue(characteristicArray, this.CALORIES_POSITION) ??
-      this.calories;
-
-    this.speed =
-      this.getNewValue(characteristicArray, this.SPEED_POSITION) ?? this.speed;
+      this.getNewValue(
+        characteristicArray,
+        this.CALORIES_POSITION,
+        this.calories,
+      ) ?? this.calories;
 
     this.rpm =
       this.getNewValue(characteristicArray, this.RPM_POSITION) ?? this.rpm;
-
-    console.log('valuesL', this.heartRate, this.distance, this.calories);
 
     this.onDataChange({
       heartRate: this.heartRate,
@@ -376,11 +408,14 @@ export default class SPDevice {
       calories: this.calories,
       watt: this.watt,
       rpm: this.rpm,
-      speed: this.speed,
     });
   };
 
-  private getNewValue = (characteristics: Uint8Array, position: Position) => {
+  private getNewValue = (
+    characteristics: Uint8Array,
+    position: Position,
+    prevValue = 0,
+  ) => {
     if (
       position.byte?.every((rule) =>
         Array.isArray(rule.value)
@@ -404,11 +439,16 @@ export default class SPDevice {
 
       const fullHigherValue = higherValue * (position.highByteMultiplier ?? 1);
 
-      if (fullHigherValue + fullLowerValue === null) {
-        console.log('NULL:', fullHigherValue + fullLowerValue);
-      }
+      const newValue = fullLowerValue + fullHigherValue;
 
-      return fullLowerValue + fullHigherValue;
+      console.log('n');
+
+      // when device is paused - data is set to 0. When data is accumulative - we want to store previous value.
+      return position.accumulative
+        ? newValue <= prevValue
+          ? prevValue
+          : newValue + prevValue
+        : newValue;
     }
     return undefined;
   };
@@ -428,9 +468,9 @@ export default class SPDevice {
     this.onStartedChange(isStarted);
   };
 
-  public changeUniqueField = (uniqueField: number) => {
-    this.uniqueField = uniqueField;
-    this.onUniqueFieldChange(uniqueField);
+  public changeUniqueField = (id: string, value: number) => {
+    this.uniqueFields = R.assocPath([id, 'value'], value, this.uniqueFields);
+    this.onUniqueFieldChange(id, value);
   };
 }
 
@@ -444,10 +484,12 @@ class ByteNumber {
     this.toLowerByte(number),
   ];
 
-  static fromBytes = ([higherByte, lowerByte]: [number, number]) =>
-    (higherByte << 8) | lowerByte;
-
-  static to16 = (number = 0) => Number(Number(number).toString(16));
+  static to16 = (number = 0) =>
+    Number(
+      Number.isNaN(Number(Number(number).toString(16)))
+        ? number
+        : Number(number).toString(16),
+    );
 }
 
 declare function setInterval(

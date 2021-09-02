@@ -2,24 +2,122 @@ import {differenceInMilliseconds} from 'date-fns';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {BleManager, Device} from 'react-native-ble-plx';
 import SPDevice, {
+  CharacteristicType,
   DeviceType,
   DeviceUniqueField,
   IData,
   IDevice,
+  OnDeviceChoose,
+  OnDisconnect,
+  OnUniqueFieldChange,
+  UniqueField,
 } from '../device';
+import * as R from 'ramda';
 
 const DEVICES_MOCK: IDevice[] = [
   {
-    id: '3123213132',
-    characteristicId: '0000fff1-0000-1000-8000-00805f9b34f1',
-    uniqueFields: [DeviceUniqueField.RESISTANCE],
+    id: 'DDCF573F-B656-661E-BD45-CE6E0943D9A0',
+    characteristicId: '0000fff1-0000-1000-8000-00805f9b34fb',
+    uniqueFields: {
+      '0': {
+        type: DeviceUniqueField.RESISTANCE,
+        get: {
+          lowByte: 10,
+          byte: [
+            {
+              index: 1,
+              value: 32,
+            },
+            {index: 0, value: CharacteristicType.WORKOUT},
+          ],
+        },
+        set: {
+          byte: 2,
+        },
+      },
+      '1': {
+        type: DeviceUniqueField.COUNT,
+        get: {
+          lowByte: 3,
+          highByte: 2,
+          highByteMultiplier: 100,
+          byte: [
+            {index: 0, value: CharacteristicType.WORKOUT},
+            {
+              index: 1,
+              value: [
+                {
+                  index: 1,
+                  value: 0,
+                },
+                {
+                  index: 0,
+                  value: 1,
+                },
+                {
+                  index: 2,
+                  value: 0,
+                },
+              ],
+            },
+          ],
+          accumulative: true,
+        },
+      },
+    },
     type: DeviceType.THREADMILL,
-    hasHeartRate: true,
+    hasHeartRate: false,
   },
   {
     id: 'FBC96C7B-FFC3-AC6E-26C0-5D983DB8FE76',
     characteristicId: '0000fff1-0000-1000-8000-00805f9b34fb',
-    uniqueFields: [DeviceUniqueField.RESISTANCE],
+    uniqueFields: {
+      '0': {
+        type: DeviceUniqueField.RESISTANCE,
+        get: {
+          lowByte: 10,
+          byte: [
+            {
+              index: 1,
+              value: 112,
+            },
+            {index: 0, value: CharacteristicType.WORKOUT},
+          ],
+        },
+        set: {
+          byte: 2,
+        },
+      },
+      '1': {
+        type: DeviceUniqueField.SPEED,
+        get: {
+          lowByte: 3,
+          lowByteMultiplier: 100,
+          highByte: 2,
+          highByteMultiplier: 10000,
+          byte: [
+            {index: 0, value: CharacteristicType.WORKOUT},
+            {
+              index: 1,
+              value: [
+                {
+                  index: 1,
+                  value: 0,
+                },
+                {
+                  index: 0,
+                  value: 1,
+                },
+                {
+                  index: 2,
+                  value: 0,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
     type: DeviceType.XBIKE,
     hasHeartRate: true,
   },
@@ -31,14 +129,27 @@ const useDevice = (manager: BleManager) => {
   const [isConnected, setConnected] = useState(false);
   const [data, setData] = useState<IData | undefined>();
   const [isStarted, setStarted] = useState(false);
-  const [uniqueField, setUniqueField] = useState(1);
+  const [uniqueField, setUniqueField] = useState<Record<string, UniqueField>>();
 
   const previousTickDate = useRef<Date>();
   const [millisecondsSpent, setMillisecondsSpent] = useState(0);
 
-  const onUniqueFieldChangeRequest = (d: number) => {
-    currentDevice.current.changeUniqueField(d);
-  };
+  const onUniqueFieldChangeRequest = useCallback<OnUniqueFieldChange>(
+    (id, value) => {
+      currentDevice.current.changeUniqueField(id, value);
+    },
+    [],
+  );
+
+  const updateUniqueField = useCallback<OnUniqueFieldChange>((id, value) => {
+    console.log('update', id, value);
+    setUniqueField(R.assocPath([id, 'value'], value));
+  }, []);
+
+  const onChooseDevice = useCallback<OnDeviceChoose>(
+    (device) => setUniqueField(device.uniqueFields),
+    [],
+  );
 
   const onChangeData = useCallback<(newData: IData) => void>(
     (newData) => {
@@ -74,45 +185,26 @@ const useDevice = (manager: BleManager) => {
     [],
   );
 
+  const onDisconnect = useCallback<OnDisconnect>(() => {
+    setConnected(false);
+    setData(undefined);
+    setUniqueField(undefined);
+  }, []);
+
   const currentDevice = useRef(
     new SPDevice(
       onChangeConnected,
       onChangeData,
-      setUniqueField,
+      updateUniqueField,
       onUniqueFieldChangeRequest,
       setStarted,
+      onChooseDevice,
+      onDisconnect,
       DEVICES_MOCK,
       false,
       80,
     ),
   );
-
-  // const handleMonitor = (
-  //   err: BleError | null,
-  //   characteristic: Characteristic | null,
-  // ) => {
-  //   if (err) {
-  //     setCharacteristics((prev) => {
-  //       if (characteristic) {
-  //         delete prev[characteristic.id];
-  //       }
-
-  //       return {...prev};
-  //     });
-  //   }
-  //   console.warn(
-  //     'newValue at 4',
-  //     characteristic?.value,
-  //     characteristic?.value && base64.toByteArray(characteristic.value),
-  //   );
-
-  //   if (characteristic) {
-  //     setCharacteristics((prev) => ({
-  //       ...prev,
-  //       [characteristic.id]: characteristic,
-  //     }));
-  //   }
-  // };
 
   const connectDevice = useCallback(
     async (device: Device) => {
@@ -130,67 +222,6 @@ const useDevice = (manager: BleManager) => {
   const disconnectDevice = useCallback(() => {
     currentDevice.current.disconnect();
   }, []);
-
-  // const toggleCharacteristic = async (
-  //   id: string,
-  //   incline: number,
-  //   isStarted: boolean,
-  // ) => {
-  //   try {
-  //     if (interval.current) {
-  //       clearInterval(interval.current);
-  //       interval.current = undefined;
-
-  //       const characteristic = characteristics[id];
-
-  //       console.log('characteristic', characteristic);
-  //       if (!characteristic) {
-  //         return;
-  //       }
-
-  //       const val = createByteArray([0x20, 0, 0, 0x00]);
-
-  //       characteristic.writeWithoutResponse(base64.fromByteArray(val));
-  //       return;
-  //     }
-  //     const characteristic = characteristics[id];
-  //     if (!characteristic) {
-  //       return;
-  //     }
-
-  //     if (characteristic.isWritableWithResponse) {
-  //       const val = createByteArray([
-  //         0x20,
-  //         isStarted ? 0x01 : 0x00,
-  //         incline,
-  //         0x00,
-  //       ]);
-
-  //       console.warn(
-  //         'val',
-  //         val,
-  //         base64.fromByteArray(val),
-  //         base64.toByteArray(base64.fromByteArray(val)),
-  //       );
-
-  //       interval.current = setInterval(
-  //         () =>
-  //           characteristic
-  //             .writeWithoutResponse(base64.fromByteArray(val))
-  //             .catch((err) => {
-  //               console.error(err);
-  //               if (interval.current) {
-  //                 clearInterval(interval.current);
-  //                 interval.current = undefined;
-  //               }
-  //             }),
-  //         50,
-  //       );
-  //     }
-  //   } catch (err) {
-  //     console.error(err);
-  //   }
-  // };
 
   return {
     connectDevice,
