@@ -28,12 +28,13 @@ import {ByteNumber, toLbs} from './utils/mappers';
 export default class SPDevice {
   public device?: Device;
   private characteristic?: Characteristic;
+
   private characteristicListener?: Subscription;
   private disconnectListener?: Subscription;
+  private dataInterval?: number;
+
   private backendDevice?: BackendDevice;
   private availableBackendDevices: BackendDevice[];
-
-  private weight?: number;
 
   private uniqueFields?: UniqueDeviceField[];
   private deviceFields = deviceFields;
@@ -51,9 +52,11 @@ export default class SPDevice {
   public onStartedChange: OnStartedChange;
   public onDeviceChoose: OnDeviceChoose;
   public onDisconnect: OnDisconnect;
-  private dataInterval?: number;
+
   public isStarted: boolean;
   public isConnected: boolean = false;
+
+  private weight?: number;
 
   constructor(
     onConnectionChange: OnConnectionChange,
@@ -173,7 +176,7 @@ export default class SPDevice {
       await this.disconnect();
     }
     const backendDevice = this.availableBackendDevices.find(
-      (availableDevice) => availableDevice.id === device.id,
+      R.propEq('id', device.id),
     );
 
     if (!backendDevice) {
@@ -181,7 +184,7 @@ export default class SPDevice {
     }
 
     this.device = device;
-    this.uniqueFields = [...backendDevice.uniqueFields];
+    this.uniqueFields = Array.from(backendDevice.uniqueFields);
     this.backendDevice = backendDevice;
 
     await this.device.connect();
@@ -196,9 +199,8 @@ export default class SPDevice {
       services.map((service) => service.characteristics()),
     );
 
-    this.characteristic = R.flatten(characteristics).find(
-      (characteristic) =>
-        characteristic.uuid === this.backendDevice?.characteristicId,
+    this.characteristic = pipe(characteristics, R.flatten, (arr) =>
+      arr.find(R.propEq('uuid', this.backendDevice?.characteristicId)),
     );
   };
 
@@ -307,15 +309,10 @@ export default class SPDevice {
     );
 
     this.onDataChange(
-      pipe(
-        this.deviceFields,
-        R.reject(
-          R.ifElse(
-            R.propEq('type', DeviceFieldType.HEART_RATE),
-            R.always(this.backendDevice?.hasHeartRate ?? false),
-            R.always(false),
-          ),
-        ),
+      this.deviceFields.filter((deviceField) =>
+        deviceField.type === DeviceFieldType.HEART_RATE
+          ? this.backendDevice?.hasHeartRate
+          : true,
       ),
     );
   };
