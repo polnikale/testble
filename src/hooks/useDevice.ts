@@ -1,26 +1,31 @@
 import {differenceInMilliseconds} from 'date-fns';
+import {pipe} from 'fp-ts/lib/function';
+import * as R from 'ramda';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {BleManager, Device} from 'react-native-ble-plx';
 import SPDevice, {
   CharacteristicType,
+  DeviceField,
+  DeviceFieldType,
   DeviceType,
-  DeviceUniqueField,
-  IData,
+  DeviceUniqueFieldType,
+  Fields,
   IDevice,
+  OnDataChange,
   OnDeviceChoose,
   OnDisconnect,
   OnUniqueFieldChange,
-  UniqueField,
+  UniqueDeviceField,
+  updateField,
 } from '../device';
-import * as R from 'ramda';
 
 const DEVICES_MOCK: IDevice[] = [
   {
     id: 'DDCF573F-B656-661E-BD45-CE6E0943D9A0',
     characteristicId: '0000fff1-0000-1000-8000-00805f9b34fb',
-    uniqueFields: {
-      '0': {
-        type: DeviceUniqueField.RESISTANCE,
+    uniqueFields: [
+      {
+        type: DeviceUniqueFieldType.RESISTANCE,
         get: {
           lowByte: 10,
           byte: [
@@ -35,8 +40,8 @@ const DEVICES_MOCK: IDevice[] = [
           byte: 2,
         },
       },
-      '1': {
-        type: DeviceUniqueField.COUNT,
+      {
+        type: DeviceUniqueFieldType.COUNT,
         get: {
           lowByte: 3,
           highByte: 2,
@@ -64,16 +69,16 @@ const DEVICES_MOCK: IDevice[] = [
           accumulative: true,
         },
       },
-    },
+    ],
     type: DeviceType.THREADMILL,
     hasHeartRate: false,
   },
   {
     id: 'FBC96C7B-FFC3-AC6E-26C0-5D983DB8FE76',
     characteristicId: '0000fff1-0000-1000-8000-00805f9b34fb',
-    uniqueFields: {
-      '0': {
-        type: DeviceUniqueField.RESISTANCE,
+    uniqueFields: [
+      {
+        type: DeviceUniqueFieldType.RESISTANCE,
         get: {
           lowByte: 10,
           byte: [
@@ -88,8 +93,8 @@ const DEVICES_MOCK: IDevice[] = [
           byte: 2,
         },
       },
-      '1': {
-        type: DeviceUniqueField.SPEED,
+      {
+        type: DeviceUniqueFieldType.SPEED,
         get: {
           lowByte: 3,
           lowByteMultiplier: 100,
@@ -117,19 +122,17 @@ const DEVICES_MOCK: IDevice[] = [
           ],
         },
       },
-    },
+    ],
     type: DeviceType.XBIKE,
     hasHeartRate: true,
   },
 ];
 
 const useDevice = (manager: BleManager) => {
-  // const [currentDevice, setCurrentDevice] = useState<Device>();
-
   const [isConnected, setConnected] = useState(false);
-  const [data, setData] = useState<IData | undefined>();
+  const [data, setData] = useState<Fields | undefined>();
   const [isStarted, setStarted] = useState(false);
-  const [uniqueField, setUniqueField] = useState<Record<string, UniqueField>>();
+  const [uniqueField, setUniqueField] = useState<UniqueDeviceField[]>();
 
   const previousTickDate = useRef<Date>();
   const [millisecondsSpent, setMillisecondsSpent] = useState(0);
@@ -141,9 +144,10 @@ const useDevice = (manager: BleManager) => {
     [],
   );
 
-  const updateUniqueField = useCallback<OnUniqueFieldChange>((id, value) => {
-    console.log('update', id, value);
-    setUniqueField(R.assocPath([id, 'value'], value));
+  const updateUniqueField = useCallback<OnUniqueFieldChange>((type, value) => {
+    setUniqueField((previousUniqueField) =>
+      previousUniqueField?.map(updateField(value, type)),
+    );
   }, []);
 
   const onChooseDevice = useCallback<OnDeviceChoose>(
@@ -151,9 +155,10 @@ const useDevice = (manager: BleManager) => {
     [],
   );
 
-  const onChangeData = useCallback<(newData: IData) => void>(
+  const onChangeData = useCallback<OnDataChange>(
     (newData) => {
       setData(newData);
+
       if (previousTickDate.current) {
         setMillisecondsSpent(
           (prevSpent) =>
@@ -223,10 +228,15 @@ const useDevice = (manager: BleManager) => {
     currentDevice.current.disconnect();
   }, []);
 
+  const changeWeight = useCallback<(weight: number) => void>((weight) => {
+    currentDevice.current.changeWeight(weight);
+  }, []);
+
   return {
     connectDevice,
     disconnectDevice,
     currentDevice,
+    changeWeight,
     isConnected,
     data,
     millisecondsSpent,

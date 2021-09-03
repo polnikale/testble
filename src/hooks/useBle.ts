@@ -1,5 +1,5 @@
 import * as R from 'ramda';
-import React, {useMemo, useState} from 'react';
+import React, {useRef, useState} from 'react';
 import {PermissionsAndroid, Platform} from 'react-native';
 import {BleManager, Device} from 'react-native-ble-plx';
 import useDevice from './useDevice';
@@ -8,15 +8,15 @@ import useDevice from './useDevice';
 
 const useBle = () => {
   const [devices, setDevices] = useState<Device[]>([]);
-  const manager = useMemo(() => new BleManager(), []);
-  // const [data, setData] = useState<Characteristic[]>();
-  // const [monitors, setMonitors] = useState<(Subscription | undefined)[]>();
+  const manager = useRef(new BleManager());
   const {connectDevice, disconnectDevice, currentDevice, isConnected, ...data} =
-    useDevice(manager);
+    useDevice(manager.current);
 
   React.useEffect(() => {
+    const oldManager = manager.current;
+
     const scanAndConnect = () => {
-      manager.startDeviceScan(null, null, (error, device) => {
+      oldManager.startDeviceScan(null, null, (error, device) => {
         if (error) {
           // Handle error (scanning will be stopped automatically)
           console.error(error);
@@ -30,7 +30,7 @@ const useBle = () => {
     };
 
     if (Platform.OS === 'ios') {
-      manager.onStateChange((state) => {
+      oldManager.onStateChange((state) => {
         console.warn('State', state);
         if (state === 'PoweredOn') {
           scanAndConnect();
@@ -50,9 +50,9 @@ const useBle = () => {
     }
 
     return () => {
-      manager.stopDeviceScan();
+      oldManager.stopDeviceScan();
     };
-  }, [manager]);
+  }, []);
 
   const toggleDevice = (device: Device) => {
     console.log('toggleDevice', device, isConnected);

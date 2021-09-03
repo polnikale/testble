@@ -9,13 +9,13 @@ import {
 } from 'react-native-ble-plx';
 import {pipe} from 'fp-ts/lib/function';
 
-export enum DeviceUniqueField {
+export enum DeviceUniqueFieldType {
   RESISTANCE = 'RESISTANCE',
   INCLINE = 'INCLINE',
   SPEED = 'SPEED',
   COUNT = 'COUNT',
 }
-export enum DeviceField {
+export enum DeviceFieldType {
   RPM = 'RPM',
   HEART_RATE = 'HEART_RATE',
   WATT = 'WATT',
@@ -35,18 +35,85 @@ export enum CharacteristicType {
 
 const LBS_IN_KG = 2.20462;
 
+export const getNewValue = (
+  characteristics: Uint8Array,
+  position: Position,
+  prevValue = 0,
+) => {
+  if (
+    position.byte?.every((rule) =>
+      Array.isArray(rule.value)
+        ? rule.value.every(
+            (bitRule) =>
+              Number(
+                characteristics[rule.index]?.toString(2)?.[bitRule.index],
+              ) === bitRule.value,
+          )
+        : rule.value === characteristics?.[rule.index],
+    ) ??
+    true
+  ) {
+    const lowerValue = ByteNumber.to16(characteristics[position.lowByte]);
+
+    const fullLowerValue = lowerValue * (position.lowByteMultiplier ?? 1);
+
+    const higherValue = ByteNumber.to16(
+      characteristics[position.highByte ?? -1],
+    );
+
+    const fullHigherValue = higherValue * (position.highByteMultiplier ?? 1);
+
+    const newValue = fullLowerValue + fullHigherValue;
+
+    // when device is paused - data is set to 0. When data is accumulative - we want to store previous value.
+    return position.accumulative ? newValue + prevValue : newValue;
+  }
+  return undefined;
+};
+
+export const getUpdatedFields = <
+  Type extends DeviceFieldType | DeviceUniqueFieldType,
+  Field extends DeviceField<Type>,
+>(
+  fields: Field[],
+  restoredValues: Partial<Record<Type, number>>,
+  characteristicArray: Uint8Array,
+) =>
+  pipe(
+    fields,
+    R.map((field) =>
+      R.assoc(
+        'value',
+        getNewValue(
+          characteristicArray,
+          field.get,
+          restoredValues[field.type],
+        ) ?? field.value,
+        field,
+      ),
+    ),
+  );
+
+export const updateField =
+  <
+    Type extends DeviceFieldType | DeviceUniqueFieldType,
+    Field extends DeviceField<Type>,
+  >(
+    value: number,
+    type: Type,
+  ) =>
+  (field: Field) =>
+    R.assoc('value', field.type === type ? value : field.value, field);
+
 export interface IDevice {
   id: string;
   characteristicId: string;
-  uniqueFields: Record<string, UniqueField>;
+  uniqueFields: UniqueDeviceField[];
   type: DeviceType;
   hasHeartRate?: boolean;
 }
 
-export type IData = {
-  type: DeviceField;
-  value: number;
-}[];
+export type Fields = DeviceField<DeviceFieldType>[];
 
 interface Position {
   lowByte: number;
@@ -56,17 +123,6 @@ interface Position {
   byte?: BytePosition[];
   accumulative?: boolean;
 }
-
-export interface UniqueField {
-  type: DeviceUniqueField;
-  value?: number;
-  get: Position;
-  set?: {
-    byte: number;
-  };
-}
-
-type Tuple<T1, T2> = [T1, T2];
 
 interface BytePosition {
   index: number;
@@ -78,26 +134,35 @@ interface BitPosition {
   value: 1 | 0;
 }
 
-interface DeviceFieldData {
-  type: DeviceField;
-  value: number;
-  position: Position;
-}
+export type DeviceField<T extends DeviceFieldType | DeviceUniqueFieldType> = {
+  type: T;
+  value?: number;
+  get: Position;
+};
+
+export type AuxiliaryDeviceField = DeviceField<DeviceFieldType>;
+export type UniqueDeviceField = DeviceField<DeviceUniqueFieldType> & {
+  set?: {
+    byte: number;
+  };
+};
 
 // the last value is checksum
 const createByteArray = (values: number[]) =>
   Uint8Array.from([...values, R.sum(values)]);
 
-type OnConnectionChange = (isConnected: boolean) => void;
-type OnStartedChange = (isStarted: boolean) => void;
-type OnDataChange = (data: IData) => void;
+export type OnConnectionChange = (isConnected: boolean) => void;
+export type OnStartedChange = (isStarted: boolean) => void;
+export type OnDataChange = (data: Fields) => void;
 export type OnDeviceChoose = (device: IDevice) => void;
-export type OnUniqueFieldChange = (id: string, value: number) => void;
+export type OnUniqueFieldChange = (
+  type: DeviceUniqueFieldType,
+  value: number,
+) => void;
 export type OnDisconnect = () => void;
 
 export default class SPDevice {
   public device?: Device;
-  private uniqueFields?: Record<string, UniqueField>;
   private characteristic?: Characteristic;
   private characteristicListener?: Subscription;
   private disconnectListener?: Subscription;
@@ -106,10 +171,11 @@ export default class SPDevice {
 
   private weight?: number;
 
-  private DEVICE_FIELDS: Record<DeviceField, DeviceFieldData> = {
-    [DeviceField.HEART_RATE]: {
-      type: DeviceField.HEART_RATE,
-      position: {
+  private uniqueFields?: UniqueDeviceField[];
+  private deviceFields: AuxiliaryDeviceField[] = [
+    {
+      type: DeviceFieldType.HEART_RATE,
+      get: {
         lowByte: 8,
         byte: [
           {
@@ -120,9 +186,9 @@ export default class SPDevice {
       },
       value: 0,
     },
-    [DeviceField.DISTANCE]: {
-      type: DeviceField.DISTANCE,
-      position: {
+    {
+      type: DeviceFieldType.DISTANCE,
+      get: {
         lowByte: 5,
         lowByteMultiplier: 10,
         highByte: 4,
@@ -137,10 +203,9 @@ export default class SPDevice {
       },
       value: 0,
     },
-
-    [DeviceField.CALORIES]: {
-      type: DeviceField.CALORIES,
-      position: {
+    {
+      type: DeviceFieldType.CALORIES,
+      get: {
         lowByte: 7,
         highByte: 6,
         highByteMultiplier: 100,
@@ -154,9 +219,9 @@ export default class SPDevice {
       },
       value: 0,
     },
-    [DeviceField.RPM]: {
-      type: DeviceField.RPM,
-      position: {
+    {
+      type: DeviceFieldType.RPM,
+      get: {
         lowByte: 3,
         highByte: 2,
         highByteMultiplier: 100,
@@ -174,9 +239,9 @@ export default class SPDevice {
       },
       value: 0,
     },
-    [DeviceField.WATT]: {
-      type: DeviceField.WATT,
-      position: {
+    {
+      type: DeviceFieldType.WATT,
+      get: {
         lowByte: 9,
         highByte: 8,
         highByteMultiplier: 100,
@@ -194,10 +259,10 @@ export default class SPDevice {
       },
       value: 0,
     },
-  };
+  ];
 
   private restoredValues: Partial<
-    Record<DeviceField | DeviceUniqueField, number>
+    Record<DeviceFieldType | DeviceUniqueFieldType, number>
   > = {};
 
   private NOTIIFCATION_INTERVAL = 1000;
@@ -245,11 +310,14 @@ export default class SPDevice {
       0x00,
     ];
 
-    R.values(this.uniqueFields ?? {}).forEach(({set, value}) => {
-      if (set) {
-        baseData[set.byte] = value ?? 1;
-      }
-    });
+    if (this.uniqueFields) {
+      this.uniqueFields.forEach(({set, value}) => {
+        if (set) {
+          baseData[set.byte] = value ?? 1;
+        }
+      });
+    }
+
     return this.sendData(baseData)?.catch((err) => {
       console.error('error', err);
       if (this.dataInterval) {
@@ -295,7 +363,7 @@ export default class SPDevice {
       }
 
       this.device = device;
-      this.uniqueFields = {...backendDevice.uniqueFields};
+      this.uniqueFields = [...backendDevice.uniqueFields];
       this.backendDevice = backendDevice;
 
       await this.device.connect();
@@ -398,89 +466,44 @@ export default class SPDevice {
 
     const characteristicArray = base64.toByteArray(characteristic.value);
 
-    const newUniqueFields: Tuple<string, UniqueField>[] = Object.entries(
-      this.uniqueFields ?? {},
-    ).map(([id, uniqueField]) => [
-      id,
-      R.assoc(
-        'value',
-        this.getNewValue(
-          characteristicArray,
-          uniqueField.get,
-          this.restoredValues[uniqueField.type],
-        ),
-        uniqueField,
-      ),
-    ]);
-
-    newUniqueFields.forEach(([id, newUniqueField]) => {
-      if (
-        newUniqueField.value !== undefined &&
-        newUniqueField.value !== this.uniqueFields?.[id]?.value
-      ) {
-        this.onUniqueFieldChangeRequest(id, newUniqueField.value);
-      }
-    });
-
-    console.log(
-      'characteristics',
-      characteristicArray,
-      newUniqueFields.map((a) => a[1].value),
-    );
-
-    this.DEVICE_FIELDS = R.mapObjIndexed(
-      (field) =>
-        R.assoc(
-          'value',
-          this.getNewValue(
-            characteristicArray,
-            field.position,
-            this.restoredValues[field.type],
-          ) ?? field.value,
-          field,
-        ),
-      this.DEVICE_FIELDS,
-    );
-
-    this.onDataChange(Object.values(this.DEVICE_FIELDS));
-  };
-
-  private getNewValue = (
-    characteristics: Uint8Array,
-    position: Position,
-    prevValue = 0,
-  ) => {
-    if (
-      position.byte?.every((rule) =>
-        Array.isArray(rule.value)
-          ? rule.value.every(
-              (bitRule) =>
-                Number(
-                  characteristics[rule.index]?.toString(2)?.[bitRule.index],
-                ) === bitRule.value,
-            )
-          : rule.value === characteristics?.[rule.index],
-      ) ??
-      true
-    ) {
-      const lowerValue = ByteNumber.to16(characteristics[position.lowByte]);
-
-      const fullLowerValue = lowerValue * (position.lowByteMultiplier ?? 1);
-
-      const higherValue = ByteNumber.to16(
-        characteristics[position.highByte ?? -1],
+    if (this.uniqueFields) {
+      const newUniqueFields = getUpdatedFields(
+        this.uniqueFields,
+        this.restoredValues,
+        characteristicArray,
       );
 
-      const fullHigherValue = higherValue * (position.highByteMultiplier ?? 1);
-
-      const newValue = fullLowerValue + fullHigherValue;
-
-      console.log('n');
-
-      // when device is paused - data is set to 0. When data is accumulative - we want to store previous value.
-      return position.accumulative ? newValue + prevValue : newValue;
+      newUniqueFields.forEach((newUniqueField, index) => {
+        if (
+          newUniqueField.value !== undefined &&
+          newUniqueField.value !== this.uniqueFields?.[index]?.value
+        ) {
+          this.onUniqueFieldChangeRequest(
+            newUniqueField.type,
+            newUniqueField.value,
+          );
+        }
+      });
     }
-    return undefined;
+
+    this.deviceFields = getUpdatedFields(
+      this.deviceFields,
+      this.restoredValues,
+      characteristicArray,
+    );
+
+    this.onDataChange(
+      pipe(
+        this.deviceFields,
+        R.reject(
+          R.ifElse(
+            R.propEq('type', DeviceFieldType.HEART_RATE),
+            R.always(this.backendDevice?.hasHeartRate ?? false),
+            R.always(false),
+          ),
+        ),
+      ),
+    );
   };
 
   public changeWeight = (weight: number) => {
@@ -496,10 +519,8 @@ export default class SPDevice {
   public changeStarted = (isStarted: boolean) => {
     if (!isStarted && this.isStarted) {
       this.restoredValues = pipe(
-        [
-          ...Object.values(this.DEVICE_FIELDS),
-          ...Object.values(this.uniqueFields ?? {}),
-        ],
+        [...this.deviceFields, ...(this.uniqueFields ?? [])],
+        // R.prop is not typed correctly :(
         R.indexBy((obj) => obj.type),
         R.mapObjIndexed((data) => data.value ?? 0),
       );
@@ -508,9 +529,13 @@ export default class SPDevice {
     this.onStartedChange(isStarted);
   };
 
-  public changeUniqueField = (id: string, value: number) => {
-    this.uniqueFields = R.assocPath([id, 'value'], value, this.uniqueFields);
-    this.onUniqueFieldChange(id, value);
+  public changeUniqueField = (type: DeviceUniqueFieldType, value: number) => {
+    this.uniqueFields = pipe(
+      this.uniqueFields ?? [],
+      R.map(updateField(value, type)),
+    );
+    // R.map([id, 'value'], value, this.uniqueFields);
+    this.onUniqueFieldChange(type, value);
   };
 }
 
