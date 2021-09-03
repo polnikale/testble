@@ -79,90 +79,9 @@ export default class SPDevice {
     this.weight = weight;
   }
 
-  public setAvailableDevices(availableDevices: BackendDevice[]) {
-    this.availableBackendDevices = availableDevices;
-  }
-
-  private sendWorkoutData = () => {
-    const baseData = [
-      CharacteristicType.WORKOUT,
-      this.isStarted ? 0x01 : 0x00,
-      0x00,
-      0x00,
-    ];
-
-    if (this.uniqueFields) {
-      this.uniqueFields.forEach(({set, value}) => {
-        if (set) {
-          baseData[set.byte] = value ?? 1;
-        }
-      });
-    }
-
-    return this.sendData(baseData)?.catch((err) => {
-      console.error('error', err);
-      if (this.dataInterval) {
-        clearInterval(this.dataInterval);
-        this.dataInterval = undefined;
-        this.disconnect();
-      }
-    });
-  };
-
-  private sendData = (data: number[]) => {
-    if (!this.isConnected) {
-      return;
-    }
-    if (!this.characteristic) {
-      return;
-    }
-    if (!this.device) {
-      return;
-    }
-
-    const payload = ByteNumber.createByteArray(data);
-
-    return this.characteristic.writeWithoutResponse(
-      base64.fromByteArray(payload),
-    );
-  };
-
   public connect = async (device: Device) => {
     try {
-      if (device.id === this.device?.id) {
-        // if ids match - we need to disconnect the devices
-        await this.disconnect();
-      }
-      console.log('this', this.availableBackendDevices);
-
-      const backendDevice = this.availableBackendDevices.find(
-        (availableDevice) => availableDevice.id === device.id,
-      );
-
-      if (!backendDevice) {
-        throw new Error(`Device not found: ${device.id}`);
-      }
-
-      this.device = device;
-      this.uniqueFields = [...backendDevice.uniqueFields];
-      this.backendDevice = backendDevice;
-
-      await this.device.connect();
-      await this.device.requestConnectionPriority(ConnectionPriority.High);
-
-      await this.device.discoverAllServicesAndCharacteristics();
-      this.onDeviceChoose(backendDevice);
-
-      const services = await this.device.services();
-
-      const characteristics = await Promise.all(
-        services.map((service) => service.characteristics()),
-      );
-
-      this.characteristic = R.flatten(characteristics).find(
-        (characteristic) =>
-          characteristic.uuid === this.backendDevice?.characteristicId,
-      );
+      this.setupDevice(device);
 
       this.onConnectedChange(true);
 
@@ -211,6 +130,120 @@ export default class SPDevice {
       this.clearDevice();
       this.onDisconnect();
     }
+  };
+
+  public changeWeight = (weight: number) => {
+    this.weight = weight;
+
+    this.sendData([
+      CharacteristicType.WEIGHT,
+      ...ByteNumber.toBytes(toLbs(weight)),
+      weight,
+    ]);
+  };
+
+  public changeStarted = (isStarted: boolean) => {
+    if (!isStarted && this.isStarted) {
+      this.restoredValues = pipe(
+        R.concat(this.deviceFields, this.uniqueFields ?? []),
+        // R.prop is not typed correctly :(
+        R.indexBy((obj) => obj.type),
+        R.mapObjIndexed((data) => data.value ?? 0),
+      );
+    }
+    this.isStarted = isStarted;
+    this.onStartedChange(isStarted);
+  };
+
+  public changeUniqueField = (type: DeviceUniqueFieldType, value: number) => {
+    this.uniqueFields = pipe(
+      this.uniqueFields ?? [],
+      R.map(updateField(value, type)),
+    );
+    this.onUniqueFieldChange(type, value);
+  };
+
+  public setAvailableDevices(availableDevices: BackendDevice[]) {
+    this.availableBackendDevices = availableDevices;
+  }
+
+  private setupDevice = async (device: Device) => {
+    if (device.id === this.device?.id) {
+      // if ids match - we need to disconnect the devices
+      await this.disconnect();
+    }
+    const backendDevice = this.availableBackendDevices.find(
+      (availableDevice) => availableDevice.id === device.id,
+    );
+
+    if (!backendDevice) {
+      throw new Error(`Device not found: ${device.id}`);
+    }
+
+    this.device = device;
+    this.uniqueFields = [...backendDevice.uniqueFields];
+    this.backendDevice = backendDevice;
+
+    await this.device.connect();
+    await this.device.requestConnectionPriority(ConnectionPriority.High);
+
+    await this.device.discoverAllServicesAndCharacteristics();
+    this.onDeviceChoose(backendDevice);
+
+    const services = await this.device.services();
+
+    const characteristics = await Promise.all(
+      services.map((service) => service.characteristics()),
+    );
+
+    this.characteristic = R.flatten(characteristics).find(
+      (characteristic) =>
+        characteristic.uuid === this.backendDevice?.characteristicId,
+    );
+  };
+
+  private sendWorkoutData = () => {
+    const baseData = [
+      CharacteristicType.WORKOUT,
+      this.isStarted ? 0x01 : 0x00,
+      0x00,
+      0x00,
+    ];
+
+    if (this.uniqueFields) {
+      this.uniqueFields.forEach(({set, value}) => {
+        if (set) {
+          baseData[set.byte] = value ?? 1;
+        }
+      });
+    }
+
+    return this.sendData(baseData)?.catch((err) => {
+      console.error('error', err);
+      if (this.dataInterval) {
+        clearInterval(this.dataInterval);
+        this.dataInterval = undefined;
+        this.disconnect();
+      }
+    });
+  };
+
+  private sendData = (data: number[]) => {
+    if (!this.isConnected) {
+      return;
+    }
+    if (!this.characteristic) {
+      return;
+    }
+    if (!this.device) {
+      return;
+    }
+
+    const payload = ByteNumber.createByteArray(data);
+
+    return this.characteristic.writeWithoutResponse(
+      base64.fromByteArray(payload),
+    );
   };
 
   private clearDevice = () => {
@@ -285,37 +318,6 @@ export default class SPDevice {
         ),
       ),
     );
-  };
-
-  public changeWeight = (weight: number) => {
-    this.weight = weight;
-
-    this.sendData([
-      CharacteristicType.WEIGHT,
-      ...ByteNumber.toBytes(toLbs(weight)),
-      weight,
-    ]);
-  };
-
-  public changeStarted = (isStarted: boolean) => {
-    if (!isStarted && this.isStarted) {
-      this.restoredValues = pipe(
-        R.concat(this.deviceFields, this.uniqueFields ?? []),
-        // R.prop is not typed correctly :(
-        R.indexBy((obj) => obj.type),
-        R.mapObjIndexed((data) => data.value ?? 0),
-      );
-    }
-    this.isStarted = isStarted;
-    this.onStartedChange(isStarted);
-  };
-
-  public changeUniqueField = (type: DeviceUniqueFieldType, value: number) => {
-    this.uniqueFields = pipe(
-      this.uniqueFields ?? [],
-      R.map(updateField(value, type)),
-    );
-    this.onUniqueFieldChange(type, value);
   };
 }
 
