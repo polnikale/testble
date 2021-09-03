@@ -1,5 +1,6 @@
-import * as R from 'ramda';
 import base64 from 'base64-js';
+import {pipe} from 'fp-ts/lib/function';
+import * as R from 'ramda';
 import {
   BleError,
   Characteristic,
@@ -7,259 +8,35 @@ import {
   Device,
   Subscription,
 } from 'react-native-ble-plx';
-import {pipe} from 'fp-ts/lib/function';
-
-export enum DeviceUniqueFieldType {
-  RESISTANCE = 'RESISTANCE',
-  INCLINE = 'INCLINE',
-  SPEED = 'SPEED',
-  COUNT = 'COUNT',
-}
-export enum DeviceFieldType {
-  RPM = 'RPM',
-  HEART_RATE = 'HEART_RATE',
-  WATT = 'WATT',
-  DISTANCE = 'DISTANCE',
-  CALORIES = 'CALORIES',
-}
-
-export enum DeviceType {
-  THREADMILL = 'THREADMILL',
-  XBIKE = 'XBIKE',
-}
-
-export enum CharacteristicType {
-  WORKOUT = 0x20,
-  WEIGHT = 0x40,
-}
-
-const LBS_IN_KG = 2.20462;
-
-export const getNewValue = (
-  characteristics: Uint8Array,
-  position: Position,
-  prevValue = 0,
-) => {
-  if (
-    position.byte?.every((rule) =>
-      Array.isArray(rule.value)
-        ? rule.value.every(
-            (bitRule) =>
-              Number(
-                characteristics[rule.index]?.toString(2)?.[bitRule.index],
-              ) === bitRule.value,
-          )
-        : rule.value === characteristics?.[rule.index],
-    ) ??
-    true
-  ) {
-    const lowerValue = ByteNumber.to16(characteristics[position.lowByte]);
-
-    const fullLowerValue = lowerValue * (position.lowByteMultiplier ?? 1);
-
-    const higherValue = ByteNumber.to16(
-      characteristics[position.highByte ?? -1],
-    );
-
-    const fullHigherValue = higherValue * (position.highByteMultiplier ?? 1);
-
-    const newValue = fullLowerValue + fullHigherValue;
-
-    // when device is paused - data is set to 0. When data is accumulative - we want to store previous value.
-    return position.accumulative ? newValue + prevValue : newValue;
-  }
-  return undefined;
-};
-
-export const getUpdatedFields = <
-  Type extends DeviceFieldType | DeviceUniqueFieldType,
-  Field extends DeviceField<Type>,
->(
-  fields: Field[],
-  restoredValues: Partial<Record<Type, number>>,
-  characteristicArray: Uint8Array,
-) =>
-  pipe(
-    fields,
-    R.map((field) =>
-      R.assoc(
-        'value',
-        getNewValue(
-          characteristicArray,
-          field.get,
-          restoredValues[field.type],
-        ) ?? field.value,
-        field,
-      ),
-    ),
-  );
-
-export const updateField =
-  <
-    Type extends DeviceFieldType | DeviceUniqueFieldType,
-    Field extends DeviceField<Type>,
-  >(
-    value: number,
-    type: Type,
-  ) =>
-  (field: Field) =>
-    R.assoc('value', field.type === type ? value : field.value, field);
-
-export interface IDevice {
-  id: string;
-  characteristicId: string;
-  uniqueFields: UniqueDeviceField[];
-  type: DeviceType;
-  hasHeartRate?: boolean;
-}
-
-export type Fields = DeviceField<DeviceFieldType>[];
-
-interface Position {
-  lowByte: number;
-  highByte?: number;
-  highByteMultiplier?: number;
-  lowByteMultiplier?: number;
-  byte?: BytePosition[];
-  accumulative?: boolean;
-}
-
-interface BytePosition {
-  index: number;
-  value: number | BitPosition[];
-}
-
-interface BitPosition {
-  index: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-  value: 1 | 0;
-}
-
-export type DeviceField<T extends DeviceFieldType | DeviceUniqueFieldType> = {
-  type: T;
-  value?: number;
-  get: Position;
-};
-
-export type AuxiliaryDeviceField = DeviceField<DeviceFieldType>;
-export type UniqueDeviceField = DeviceField<DeviceUniqueFieldType> & {
-  set?: {
-    byte: number;
-  };
-};
-
-// the last value is checksum
-const createByteArray = (values: number[]) =>
-  Uint8Array.from([...values, R.sum(values)]);
-
-export type OnConnectionChange = (isConnected: boolean) => void;
-export type OnStartedChange = (isStarted: boolean) => void;
-export type OnDataChange = (data: Fields) => void;
-export type OnDeviceChoose = (device: IDevice) => void;
-export type OnUniqueFieldChange = (
-  type: DeviceUniqueFieldType,
-  value: number,
-) => void;
-export type OnDisconnect = () => void;
+import {
+  BackendDevice,
+  CharacteristicType,
+  DeviceFieldType,
+  DeviceUniqueFieldType,
+  OnConnectionChange,
+  OnDataChange,
+  OnDeviceChoose,
+  OnDisconnect,
+  OnStartedChange,
+  OnUniqueFieldChange,
+  UniqueDeviceField,
+} from './device.interface';
+import deviceFields from './deviceFields';
+import {getUpdatedFields, updateField} from './utils/field';
+import {ByteNumber, toLbs} from './utils/mappers';
 
 export default class SPDevice {
   public device?: Device;
   private characteristic?: Characteristic;
   private characteristicListener?: Subscription;
   private disconnectListener?: Subscription;
-  private backendDevice?: IDevice;
-  private availableBackendDevices: IDevice[];
+  private backendDevice?: BackendDevice;
+  private availableBackendDevices: BackendDevice[];
 
   private weight?: number;
 
   private uniqueFields?: UniqueDeviceField[];
-  private deviceFields: AuxiliaryDeviceField[] = [
-    {
-      type: DeviceFieldType.HEART_RATE,
-      get: {
-        lowByte: 8,
-        byte: [
-          {
-            index: 1,
-            value: 48,
-          },
-        ],
-      },
-      value: 0,
-    },
-    {
-      type: DeviceFieldType.DISTANCE,
-      get: {
-        lowByte: 5,
-        lowByteMultiplier: 10,
-        highByte: 4,
-        highByteMultiplier: 1000,
-        byte: [
-          {
-            index: 1,
-            value: 48,
-          },
-        ],
-        accumulative: true,
-      },
-      value: 0,
-    },
-    {
-      type: DeviceFieldType.CALORIES,
-      get: {
-        lowByte: 7,
-        highByte: 6,
-        highByteMultiplier: 100,
-        byte: [
-          {
-            index: 1,
-            value: 48,
-          },
-        ],
-        accumulative: true,
-      },
-      value: 0,
-    },
-    {
-      type: DeviceFieldType.RPM,
-      get: {
-        lowByte: 3,
-        highByte: 2,
-        highByteMultiplier: 100,
-        byte: [
-          {
-            index: 1,
-            value: [
-              {
-                index: 1,
-                value: 1,
-              },
-            ],
-          },
-        ],
-      },
-      value: 0,
-    },
-    {
-      type: DeviceFieldType.WATT,
-      get: {
-        lowByte: 9,
-        highByte: 8,
-        highByteMultiplier: 100,
-        byte: [
-          {
-            index: 1,
-            value: [
-              {
-                index: 1,
-                value: 1,
-              },
-            ],
-          },
-        ],
-      },
-      value: 0,
-    },
-  ];
+  private deviceFields = deviceFields;
 
   private restoredValues: Partial<
     Record<DeviceFieldType | DeviceUniqueFieldType, number>
@@ -286,7 +63,7 @@ export default class SPDevice {
     onStartedChange: OnStartedChange,
     onDeviceChoose: OnDeviceChoose,
     onDisconnect: OnDisconnect,
-    availableDevices: IDevice[],
+    availableDevices: BackendDevice[],
     isStarted: boolean = false,
     weight?: number,
   ) {
@@ -300,6 +77,10 @@ export default class SPDevice {
     this.onDisconnect = onDisconnect;
     this.isStarted = isStarted;
     this.weight = weight;
+  }
+
+  public setAvailableDevices(availableDevices: BackendDevice[]) {
+    this.availableBackendDevices = availableDevices;
   }
 
   private sendWorkoutData = () => {
@@ -339,7 +120,7 @@ export default class SPDevice {
       return;
     }
 
-    const payload = createByteArray(data);
+    const payload = ByteNumber.createByteArray(data);
 
     return this.characteristic.writeWithoutResponse(
       base64.fromByteArray(payload),
@@ -511,7 +292,7 @@ export default class SPDevice {
 
     this.sendData([
       CharacteristicType.WEIGHT,
-      ...ByteNumber.toBytes(weight * LBS_IN_KG),
+      ...ByteNumber.toBytes(toLbs(weight)),
       weight,
     ]);
   };
@@ -519,7 +300,7 @@ export default class SPDevice {
   public changeStarted = (isStarted: boolean) => {
     if (!isStarted && this.isStarted) {
       this.restoredValues = pipe(
-        [...this.deviceFields, ...(this.uniqueFields ?? [])],
+        R.concat(this.deviceFields, this.uniqueFields ?? []),
         // R.prop is not typed correctly :(
         R.indexBy((obj) => obj.type),
         R.mapObjIndexed((data) => data.value ?? 0),
@@ -534,27 +315,8 @@ export default class SPDevice {
       this.uniqueFields ?? [],
       R.map(updateField(value, type)),
     );
-    // R.map([id, 'value'], value, this.uniqueFields);
     this.onUniqueFieldChange(type, value);
   };
-}
-
-class ByteNumber {
-  static toLowerByte = (number: number) => number & 0xff;
-
-  static toHigherByte = (number: number) => (number >> 8) & 0xff;
-
-  static toBytes = (number: number) => [
-    this.toHigherByte(number),
-    this.toLowerByte(number),
-  ];
-
-  static to16 = (number = 0) =>
-    Number(
-      Number.isNaN(Number(Number(number).toString(16)))
-        ? number
-        : Number(number).toString(16),
-    );
 }
 
 declare function setInterval(
