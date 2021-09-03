@@ -7,12 +7,20 @@ import {
   Device,
   Subscription,
 } from 'react-native-ble-plx';
+import {pipe} from 'fp-ts/lib/function';
 
 export enum DeviceUniqueField {
   RESISTANCE = 'RESISTANCE',
   INCLINE = 'INCLINE',
   SPEED = 'SPEED',
   COUNT = 'COUNT',
+}
+export enum DeviceField {
+  RPM = 'RPM',
+  HEART_RATE = 'HEART_RATE',
+  WATT = 'WATT',
+  DISTANCE = 'DISTANCE',
+  CALORIES = 'CALORIES',
 }
 
 export enum DeviceType {
@@ -35,13 +43,10 @@ export interface IDevice {
   hasHeartRate?: boolean;
 }
 
-export interface IData {
-  distance: number;
-  calories: number;
-  heartRate?: number;
-  watt: number;
-  rpm: number;
-}
+export type IData = {
+  type: DeviceField;
+  value: number;
+}[];
 
 interface Position {
   lowByte: number;
@@ -73,6 +78,12 @@ interface BitPosition {
   value: 1 | 0;
 }
 
+interface DeviceFieldData {
+  type: DeviceField;
+  value: number;
+  position: Position;
+}
+
 // the last value is checksum
 const createByteArray = (values: number[]) =>
   Uint8Array.from([...values, R.sum(values)]);
@@ -94,66 +105,102 @@ export default class SPDevice {
   private availableBackendDevices: IDevice[];
 
   private weight?: number;
-  private heartRate = 0;
-  private rpm = 0;
-  private distance = 0;
-  private calories = 0;
-  private watt = 0;
 
-  private NOTIIFCATION_INTERVAL = 1000;
-
-  private HEART_RATE_POSITION: Position = {
-    lowByte: 8,
-    byte: [
-      {
-        index: 1,
-        value: 48,
-      },
-    ],
-  };
-
-  private DISTANCE_POSITION: Position = {
-    lowByte: 5,
-    lowByteMultiplier: 10,
-    highByte: 4,
-    highByteMultiplier: 1000,
-    byte: [
-      {
-        index: 1,
-        value: 48,
-      },
-    ],
-    accumulative: false,
-  };
-
-  private CALORIES_POSITION: Position = {
-    lowByte: 7,
-    highByte: 6,
-    highByteMultiplier: 100,
-    byte: [
-      {
-        index: 1,
-        value: 48,
-      },
-    ],
-    accumulative: false,
-  };
-
-  private RPM_POSITION: Position = {
-    lowByte: 3,
-    highByte: 2,
-    byte: [
-      {
-        index: 1,
-        value: [
+  private DEVICE_FIELDS: Record<DeviceField, DeviceFieldData> = {
+    [DeviceField.HEART_RATE]: {
+      type: DeviceField.HEART_RATE,
+      position: {
+        lowByte: 8,
+        byte: [
           {
             index: 1,
-            value: 1,
+            value: 48,
           },
         ],
       },
-    ],
+      value: 0,
+    },
+    [DeviceField.DISTANCE]: {
+      type: DeviceField.DISTANCE,
+      position: {
+        lowByte: 5,
+        lowByteMultiplier: 10,
+        highByte: 4,
+        highByteMultiplier: 1000,
+        byte: [
+          {
+            index: 1,
+            value: 48,
+          },
+        ],
+        accumulative: true,
+      },
+      value: 0,
+    },
+
+    [DeviceField.CALORIES]: {
+      type: DeviceField.CALORIES,
+      position: {
+        lowByte: 7,
+        highByte: 6,
+        highByteMultiplier: 100,
+        byte: [
+          {
+            index: 1,
+            value: 48,
+          },
+        ],
+        accumulative: true,
+      },
+      value: 0,
+    },
+    [DeviceField.RPM]: {
+      type: DeviceField.RPM,
+      position: {
+        lowByte: 3,
+        highByte: 2,
+        highByteMultiplier: 100,
+        byte: [
+          {
+            index: 1,
+            value: [
+              {
+                index: 1,
+                value: 1,
+              },
+            ],
+          },
+        ],
+      },
+      value: 0,
+    },
+    [DeviceField.WATT]: {
+      type: DeviceField.WATT,
+      position: {
+        lowByte: 9,
+        highByte: 8,
+        highByteMultiplier: 100,
+        byte: [
+          {
+            index: 1,
+            value: [
+              {
+                index: 1,
+                value: 1,
+              },
+            ],
+          },
+        ],
+      },
+      value: 0,
+    },
   };
+
+  private restoredValues: Partial<
+    Record<DeviceField | DeviceUniqueField, number>
+  > = {};
+
+  private NOTIIFCATION_INTERVAL = 1000;
 
   public onConnectionChange: OnConnectionChange;
   public onDataChange: OnDataChange;
@@ -360,7 +407,7 @@ export default class SPDevice {
         this.getNewValue(
           characteristicArray,
           uniqueField.get,
-          uniqueField.value,
+          this.restoredValues[uniqueField.type],
         ),
         uniqueField,
       ),
@@ -381,34 +428,21 @@ export default class SPDevice {
       newUniqueFields.map((a) => a[1].value),
     );
 
-    this.heartRate =
-      this.getNewValue(characteristicArray, this.HEART_RATE_POSITION) ??
-      this.heartRate;
+    this.DEVICE_FIELDS = R.mapObjIndexed(
+      (field) =>
+        R.assoc(
+          'value',
+          this.getNewValue(
+            characteristicArray,
+            field.position,
+            this.restoredValues[field.type],
+          ) ?? field.value,
+          field,
+        ),
+      this.DEVICE_FIELDS,
+    );
 
-    this.distance =
-      this.getNewValue(
-        characteristicArray,
-        this.DISTANCE_POSITION,
-        this.distance,
-      ) ?? this.distance;
-
-    this.calories =
-      this.getNewValue(
-        characteristicArray,
-        this.CALORIES_POSITION,
-        this.calories,
-      ) ?? this.calories;
-
-    this.rpm =
-      this.getNewValue(characteristicArray, this.RPM_POSITION) ?? this.rpm;
-
-    this.onDataChange({
-      heartRate: this.heartRate,
-      distance: this.distance,
-      calories: this.calories,
-      watt: this.watt,
-      rpm: this.rpm,
-    });
+    this.onDataChange(Object.values(this.DEVICE_FIELDS));
   };
 
   private getNewValue = (
@@ -444,11 +478,7 @@ export default class SPDevice {
       console.log('n');
 
       // when device is paused - data is set to 0. When data is accumulative - we want to store previous value.
-      return position.accumulative
-        ? newValue <= prevValue
-          ? prevValue
-          : newValue + prevValue
-        : newValue;
+      return position.accumulative ? newValue + prevValue : newValue;
     }
     return undefined;
   };
@@ -464,6 +494,16 @@ export default class SPDevice {
   };
 
   public changeStarted = (isStarted: boolean) => {
+    if (!isStarted && this.isStarted) {
+      this.restoredValues = pipe(
+        [
+          ...Object.values(this.DEVICE_FIELDS),
+          ...Object.values(this.uniqueFields ?? {}),
+        ],
+        R.indexBy((obj) => obj.type),
+        R.mapObjIndexed((data) => data.value ?? 0),
+      );
+    }
     this.isStarted = isStarted;
     this.onStartedChange(isStarted);
   };

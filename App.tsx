@@ -55,7 +55,11 @@ const App = () => {
             </Text>
           </TouchableOpacity>
         ))}
-        <Text>{JSON.stringify(data)}</Text>
+        {data?.map((field) => (
+          <Text>
+            {field.type} - {field.value}
+          </Text>
+        ))}
 
         {Object.values(uniqueField ?? {}).map((field) => (
           <Text>
