@@ -84,7 +84,7 @@ export default class SPDevice {
 
   public connect = async (device: Device) => {
     try {
-      this.setupDevice(device);
+      await this.setupDevice(device);
 
       this.onConnectedChange(true);
 
@@ -101,6 +101,11 @@ export default class SPDevice {
 
       this.characteristicListener = this.characteristic?.monitor(
         this.handleMonitor.bind(this),
+      );
+      console.log(
+        'characteri',
+        this.characteristic?.id,
+        this.characteristicListener,
       );
     } catch (error) {
       console.error('Connection failed', error);
@@ -119,6 +124,10 @@ export default class SPDevice {
 
   public disconnect = async () => {
     try {
+      if (this.dataInterval) {
+        clearInterval(this.dataInterval);
+        this.dataInterval = undefined;
+      }
       if (this.characteristicListener) {
         this.characteristicListener.remove();
       }
@@ -171,37 +180,41 @@ export default class SPDevice {
   }
 
   private setupDevice = async (device: Device) => {
-    if (device.id === this.device?.id) {
-      // if ids match - we need to disconnect the devices
-      await this.disconnect();
+    try {
+      if (device.id === this.device?.id) {
+        // if ids match - we need to disconnect the devices
+        await this.disconnect();
+      }
+      const backendDevice = this.availableBackendDevices.find(
+        R.propEq('id', device.id),
+      );
+
+      if (!backendDevice) {
+        throw new Error(`Device not found: ${device.id}`);
+      }
+
+      this.device = device;
+      this.uniqueFields = Array.from(backendDevice.uniqueFields);
+      this.backendDevice = backendDevice;
+
+      await this.device.connect();
+      await this.device.requestConnectionPriority(ConnectionPriority.High);
+
+      await this.device.discoverAllServicesAndCharacteristics();
+      this.onDeviceChoose(backendDevice);
+
+      const services = await this.device.services();
+
+      const characteristics = await Promise.all(
+        services.map((service) => service.characteristics()),
+      );
+
+      this.characteristic = pipe(characteristics, R.flatten, (arr) =>
+        arr.find(R.propEq('uuid', this.backendDevice?.characteristicId)),
+      );
+    } catch (error) {
+      console.error(`Setup failed ${error}`);
     }
-    const backendDevice = this.availableBackendDevices.find(
-      R.propEq('id', device.id),
-    );
-
-    if (!backendDevice) {
-      throw new Error(`Device not found: ${device.id}`);
-    }
-
-    this.device = device;
-    this.uniqueFields = Array.from(backendDevice.uniqueFields);
-    this.backendDevice = backendDevice;
-
-    await this.device.connect();
-    await this.device.requestConnectionPriority(ConnectionPriority.High);
-
-    await this.device.discoverAllServicesAndCharacteristics();
-    this.onDeviceChoose(backendDevice);
-
-    const services = await this.device.services();
-
-    const characteristics = await Promise.all(
-      services.map((service) => service.characteristics()),
-    );
-
-    this.characteristic = pipe(characteristics, R.flatten, (arr) =>
-      arr.find(R.propEq('uuid', this.backendDevice?.characteristicId)),
-    );
   };
 
   private sendWorkoutData = () => {
@@ -281,6 +294,11 @@ export default class SPDevice {
     }
 
     const characteristicArray = base64.toByteArray(characteristic.value);
+
+    if (characteristicArray.length <= 10) {
+      console.error('Error notification');
+      return;
+    }
 
     if (this.uniqueFields) {
       const newUniqueFields = getUpdatedFields(

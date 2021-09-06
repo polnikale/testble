@@ -54,6 +54,7 @@ interface BitPosition {
 export type DeviceField<T extends DeviceFieldType | DeviceUniqueFieldType> = {
   type: T;
   value?: number;
+  isDecimal?: boolean;
   get: Position;
 };
 

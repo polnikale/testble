@@ -12,6 +12,7 @@ export default [
         },
       ],
     },
+    isDecimal: true,
     value: 0,
   },
   {
@@ -58,28 +59,12 @@ export default [
           index: 1,
           value: [
             {
-              index: 1,
+              index: 4,
               value: 1,
             },
-          ],
-        },
-      ],
-    },
-    value: 0,
-  },
-  {
-    type: DeviceFieldType.WATT,
-    get: {
-      lowByte: 9,
-      highByte: 8,
-      highByteMultiplier: 100,
-      byte: [
-        {
-          index: 1,
-          value: [
             {
-              index: 1,
-              value: 1,
+              index: 6,
+              value: 0,
             },
           ],
         },
@@ -87,4 +72,24 @@ export default [
     },
     value: 0,
   },
+  // {
+  //   type: DeviceFieldType.WATT,
+  //   get: {
+  //     lowByte: 9,
+  //     highByte: 8,
+  //     highByteMultiplier: 100,
+  //     byte: [
+  //       {
+  //         index: 1,
+  //         value: [
+  //           {
+  //             index: 6,
+  //             value: 1,
+  //           },
+  //         ],
+  //       },
+  //     ],
+  //   },
+  //   value: 0,
+  // },
 ] as AuxiliaryDeviceField[];

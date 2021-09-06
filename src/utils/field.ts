@@ -1,17 +1,18 @@
 import {pipe} from 'fp-ts/lib/function';
 import * as R from 'ramda';
 import {
-  Position,
+  DeviceField,
   DeviceFieldType,
   DeviceUniqueFieldType,
-  DeviceField,
+  Position,
 } from '../device.interface';
 import {ByteNumber} from './mappers';
 
 export const getNewValue = (
   characteristics: Uint8Array,
   position: Position,
-  prevValue = 0,
+  prevValue: number,
+  isDecimal?: boolean,
 ) => {
   if (
     position.byte?.every((rule) =>
@@ -19,20 +20,24 @@ export const getNewValue = (
         ? rule.value.every(
             (bitRule) =>
               Number(
-                characteristics[rule.index]?.toString(2)?.[bitRule.index],
+                ByteNumber.to2StringReversed(characteristics[rule.index])?.[
+                  bitRule.index
+                ] ?? 0,
               ) === bitRule.value,
           )
         : rule.value === characteristics?.[rule.index],
     ) ??
     true
   ) {
-    const lowerValue = ByteNumber.to16(characteristics[position.lowByte]);
+    const lowerValue = isDecimal
+      ? ByteNumber.to10(characteristics[position.lowByte])
+      : ByteNumber.to16(characteristics[position.lowByte]);
 
     const fullLowerValue = lowerValue * (position.lowByteMultiplier ?? 1);
 
-    const higherValue = ByteNumber.to16(
-      characteristics[position.highByte ?? -1],
-    );
+    const higherValue = isDecimal
+      ? ByteNumber.to10(characteristics[position.highByte ?? -1])
+      : ByteNumber.to16(characteristics[position.highByte ?? -1]);
 
     const fullHigherValue = higherValue * (position.highByteMultiplier ?? 1);
 
@@ -60,7 +65,8 @@ export const getUpdatedFields = <
         getNewValue(
           characteristicArray,
           field.get,
-          restoredValues[field.type],
+          restoredValues[field.type] ?? 0,
+          field.isDecimal,
         ) ?? field.value,
         field,
       ),
@@ -77,3 +83,14 @@ export const updateField =
   ) =>
   (field: Field) =>
     R.assoc('value', field.type === type ? value : field.value, field);
+
+// export const isResponseError = (characteristicArray: Uint8Array) =>
+//   pipe(
+//     characteristicArray,
+//     (array) => array[0] ?? 0,
+//     ByteNumber.to2StringReversed,
+//     (bytes) =>
+//       bytes.length > 3
+//         ? pipe(bytes, R.slice(0, 4), R.map(Number), R.any(R.equals(1)))
+//         : false,
+//   );

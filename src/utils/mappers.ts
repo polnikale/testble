@@ -16,10 +16,16 @@ export class ByteNumber {
 
   static to16 = (number = 0) =>
     Number(
-      Number.isNaN(Number(Number(number).toString(16)))
+      Number.isNaN(Number(this.to16String(number)))
         ? number
-        : Number(number).toString(16),
+        : this.to16String(number),
     );
+  static to16String = (number: number) => Number(number).toString(16);
+
+  static to2StringReversed = (number: number) =>
+    Number(number).toString(2).split('').reverse();
+
+  static to10 = (number = 0) => number;
 
   // last value is checksum
   static createByteArray = (values: number[]) =>

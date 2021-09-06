@@ -1,22 +1,18 @@
 import * as R from 'ramda';
-import React, {useRef, useState} from 'react';
+import React, {useState} from 'react';
 import {PermissionsAndroid, Platform} from 'react-native';
-import {BleManager, Device} from 'react-native-ble-plx';
-import useDevice from './useDevice';
+import {BleManager, Device, State} from 'react-native-ble-plx';
+import useDevice, {DeviceDefaults} from './useDevice';
 
-// export const manager = new BleManager();
+export const manager = new BleManager();
 
-const useBle = () => {
+const useBle = (defaults: DeviceDefaults) => {
   const [devices, setDevices] = useState<Device[]>([]);
-  const manager = useRef(new BleManager());
-  const {connectDevice, disconnectDevice, currentDevice, isConnected, ...data} =
-    useDevice(manager.current);
+  const connectedDevice = useDevice(manager, defaults);
 
   React.useEffect(() => {
-    const oldManager = manager.current;
-
     const scanAndConnect = () => {
-      oldManager.startDeviceScan(null, null, (error, device) => {
+      manager.startDeviceScan(null, null, (error, device) => {
         if (error) {
           // Handle error (scanning will be stopped automatically)
           console.error(error);
@@ -24,15 +20,17 @@ const useBle = () => {
         }
 
         if (device?.name) {
-          setDevices((prevDev) => R.uniqBy(R.prop('id'), [...prevDev, device]));
+          setDevices(R.pipe(R.append(device), R.uniqBy(R.prop('id'))));
         }
       });
     };
 
     if (Platform.OS === 'ios') {
-      oldManager.onStateChange((state) => {
-        console.warn('State', state);
-        if (state === 'PoweredOn') {
+      manager
+        .state()
+        .then(R.when(R.equals<State>(State.PoweredOn), scanAndConnect));
+      manager.onStateChange((state) => {
+        if (state === State.PoweredOn) {
           scanAndConnect();
         }
       });
@@ -50,24 +48,13 @@ const useBle = () => {
     }
 
     return () => {
-      oldManager.stopDeviceScan();
+      manager.stopDeviceScan();
     };
   }, []);
 
-  const toggleDevice = (device: Device) => {
-    console.log('toggleDevice', device, isConnected);
-    if (isConnected) {
-      disconnectDevice();
-    } else {
-      connectDevice(device);
-    }
-  };
-
   return {
     devices,
-    toggleDevice,
-    currentDevice,
-    ...data,
+    ...connectedDevice,
   };
 };
 

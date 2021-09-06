@@ -16,7 +16,12 @@ import {
 } from '../device.interface';
 import {updateField} from '../utils/field';
 
-const useDevice = (manager: BleManager) => {
+export interface DeviceDefaults {
+  started?: boolean;
+  weight?: number;
+}
+
+const useDevice = (manager: BleManager, {started, weight}: DeviceDefaults) => {
   const [isConnected, setConnected] = useState(false);
   const [data, setData] = useState<DeviceFields | undefined>();
   const [isStarted, setStarted] = useState(false);
@@ -26,7 +31,7 @@ const useDevice = (manager: BleManager) => {
   const [millisecondsSpent, setMillisecondsSpent] = useState(0);
 
   // taken from apollo cache later
-  const DEVICES_MOCK: BackendDevice[] = useMemo(
+  const DEVICES_MOCK = useMemo<BackendDevice[]>(
     () => [
       {
         id: 'DDCF573F-B656-661E-BD45-CE6E0943D9A0',
@@ -60,15 +65,7 @@ const useDevice = (manager: BleManager) => {
                   index: 1,
                   value: [
                     {
-                      index: 1,
-                      value: 0,
-                    },
-                    {
-                      index: 0,
-                      value: 1,
-                    },
-                    {
-                      index: 2,
+                      index: 4,
                       value: 0,
                     },
                   ],
@@ -92,7 +89,7 @@ const useDevice = (manager: BleManager) => {
               byte: [
                 {
                   index: 1,
-                  value: 112,
+                  value: [{index: 6, value: 1}],
                 },
                 {index: 0, value: CharacteristicType.WORKOUT},
               ],
@@ -114,15 +111,7 @@ const useDevice = (manager: BleManager) => {
                   index: 1,
                   value: [
                     {
-                      index: 1,
-                      value: 0,
-                    },
-                    {
-                      index: 0,
-                      value: 1,
-                    },
-                    {
-                      index: 2,
+                      index: 4,
                       value: 0,
                     },
                   ],
@@ -206,8 +195,8 @@ const useDevice = (manager: BleManager) => {
       onChooseDevice,
       onDisconnect,
       DEVICES_MOCK,
-      false,
-      80,
+      started,
+      weight,
     ),
   );
 
@@ -215,7 +204,7 @@ const useDevice = (manager: BleManager) => {
   // dependencies changes - class wouldn't work as expected.
   // That's why we need to update fields in useEffect
   useEffect(() => {
-    currentDevice.current.onConnectedChange = onChangeConnected;
+    currentDevice.current.onConnectionChange = onChangeConnected;
   }, [onChangeConnected]);
 
   useEffect(() => {
@@ -247,6 +236,12 @@ const useDevice = (manager: BleManager) => {
     currentDevice.current.setAvailableDevices(DEVICES_MOCK);
   }, [DEVICES_MOCK]);
 
+  useEffect(() => {
+    if (weight) {
+      currentDevice.current.changeWeight(weight);
+    }
+  }, [weight]);
+
   const connectDevice = useCallback(
     async (device: Device) => {
       try {
@@ -264,8 +259,8 @@ const useDevice = (manager: BleManager) => {
     currentDevice.current.disconnect();
   }, []);
 
-  const changeWeight = useCallback<(weight: number) => void>((weight) => {
-    currentDevice.current.changeWeight(weight);
+  const changeWeight = useCallback<(weight: number) => void>((newWeight) => {
+    currentDevice.current.changeWeight(newWeight);
   }, []);
 
   return {

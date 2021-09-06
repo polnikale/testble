@@ -26,13 +26,14 @@ import useBle from './src/hooks/useBle';
 const App = () => {
   const {
     devices,
-    toggleDevice,
     currentDevice,
     data,
     isStarted,
     uniqueField,
     millisecondsSpent,
-  } = useBle();
+    connectDevice,
+    disconnectDevice,
+  } = useBle({started: false, weight: 70});
   const isDarkMode = useColorScheme() === 'dark';
 
   const backgroundStyle = {
@@ -46,7 +47,12 @@ const App = () => {
         contentInsetAdjustmentBehavior="automatic"
         style={backgroundStyle}>
         {devices.map((device) => (
-          <TouchableOpacity onPress={() => toggleDevice(device)}>
+          <TouchableOpacity
+            onPress={() =>
+              currentDevice.current.device?.id === device.id
+                ? connectDevice(device)
+                : disconnectDevice()
+            }>
             <Text style={{color: 'red', fontSize: 30}}>
               {device.name} -{' '}
               {device.id === currentDevice?.current.device?.id
@@ -56,33 +62,42 @@ const App = () => {
           </TouchableOpacity>
         ))}
         {data?.map((field) => (
-          <Text>
+          <Text style={{fontSize: 24, margin: 4}}>
             {field.type} - {field.value}
           </Text>
         ))}
 
         {Object.values(uniqueField ?? {}).map((field) => (
-          <Text>
-            {field.type} - {field.value}
+          <Text style={{fontSize: 24, margin: 4}}>
+            {field.type} - {field.value || (field.set ? 1 : 0)}
           </Text>
         ))}
-        <Text>Time spent - {millisecondsSpent / 1000}</Text>
-        <Text>Please set incline</Text>
-        {Object.entries(uniqueField ?? {}).map(
-          ([id, field]) =>
+        <Text style={{fontSize: 24, margin: 4, marginTop: 16}}>
+          Time spent - {millisecondsSpent / 1000}
+        </Text>
+        {uniqueField?.map(
+          (field) =>
             field.set && (
-              <TextInput
-                value={'' + (field.value ?? 1)}
-                style={{backgroundColor: 'green', padding: 16}}
-                onChangeText={(value) =>
-                  currentDevice.current.changeUniqueField(id, +value)
-                }
-              />
+              <>
+                <Text style={{fontSize: 18, margin: 4, marginTop: 16}}>
+                  Please set resistance
+                </Text>
+                <TextInput
+                  value={'' + (field.value || 1)}
+                  style={{backgroundColor: 'green', padding: 16}}
+                  onChangeText={(value) =>
+                    currentDevice.current.changeUniqueField(field.type, +value)
+                  }
+                />
+              </>
             ),
         )}
 
-        <Text style={{fontSize: 30}}>Please set started</Text>
+        <Text style={{fontSize: 30, margin: 4, marginTop: 16}}>
+          Please set started
+        </Text>
         <Switch
+          style={{marginBottom: 100, marginLeft: 4}}
           value={isStarted}
           onValueChange={currentDevice.current.changeStarted}
         />
