@@ -13,6 +13,7 @@ import {
   OnDataChange,
   OnDisconnect,
   DeviceFields,
+  OnConnectionChange,
 } from '../device.interface';
 import {updateField} from '../utils/field';
 
@@ -26,6 +27,7 @@ const useDevice = (manager: BleManager, {started, weight}: DeviceDefaults) => {
   const [data, setData] = useState<DeviceFields | undefined>();
   const [isStarted, setStarted] = useState(false);
   const [uniqueField, setUniqueField] = useState<UniqueDeviceField[]>();
+  const [device, setDevice] = useState<BackendDevice>();
 
   const restoreDate = useRef<Date>();
   const [millisecondsSpent, setMillisecondsSpent] = useState(0);
@@ -127,6 +129,8 @@ const useDevice = (manager: BleManager, {started, weight}: DeviceDefaults) => {
     [],
   );
 
+  // Private methods to fetch data FROM the class
+
   const onRequestUpdateUniqueField = useCallback<OnUniqueFieldChange>(
     (id, value) => {
       currentDevice.current.changeUniqueField(id, value);
@@ -143,10 +147,10 @@ const useDevice = (manager: BleManager, {started, weight}: DeviceDefaults) => {
     [],
   );
 
-  const onChooseDevice = useCallback<OnDeviceChoose>(
-    (device) => setUniqueField(device.uniqueFields),
-    [],
-  );
+  const onChooseDevice = useCallback<OnDeviceChoose>((newDevice) => {
+    setDevice(newDevice);
+    setUniqueField(newDevice.uniqueFields);
+  }, []);
 
   const onChangeData = useCallback<OnDataChange>(
     (newData) => {
@@ -167,22 +171,20 @@ const useDevice = (manager: BleManager, {started, weight}: DeviceDefaults) => {
     [isStarted],
   );
 
-  const onChangeConnected = useCallback<(newConnected: boolean) => void>(
-    (newConnected) => {
-      setConnected(newConnected);
+  const onChangeConnected = useCallback<OnConnectionChange>((newConnected) => {
+    setConnected(newConnected);
 
-      if (!newConnected) {
-        restoreDate.current = undefined;
-        setMillisecondsSpent(0);
-      }
-    },
-    [],
-  );
+    if (!newConnected) {
+      restoreDate.current = undefined;
+      setMillisecondsSpent(0);
+    }
+  }, []);
 
   const onDisconnect = useCallback<OnDisconnect>(() => {
     setConnected(false);
     setData(undefined);
     setUniqueField(undefined);
+    setDevice(undefined);
   }, []);
 
   const currentDevice = useRef(
@@ -242,12 +244,14 @@ const useDevice = (manager: BleManager, {started, weight}: DeviceDefaults) => {
     }
   }, [weight]);
 
+  // Public fields to work with from components
+
   const connectDevice = useCallback(
-    async (device: Device) => {
+    async (newDevice: Device) => {
       try {
         manager.stopDeviceScan();
 
-        currentDevice.current.connect(device);
+        currentDevice.current.connect(newDevice);
       } catch (err) {
         console.error(err);
       }
@@ -259,15 +263,22 @@ const useDevice = (manager: BleManager, {started, weight}: DeviceDefaults) => {
     currentDevice.current.disconnect();
   }, []);
 
-  const changeWeight = useCallback<(weight: number) => void>((newWeight) => {
-    currentDevice.current.changeWeight(newWeight);
-  }, []);
+  const changeStarted = useCallback<OnConnectionChange>(
+    (newStarted) => currentDevice.current.changeStarted(newStarted),
+    [],
+  );
+
+  const changeUniqueField = useCallback<OnUniqueFieldChange>(
+    (type, newValue) => currentDevice.current.changeUniqueField(type, newValue),
+    [],
+  );
 
   return {
     connectDevice,
     disconnectDevice,
-    changeWeight,
-    currentDevice,
+    changeUniqueField,
+    changeStarted,
+    device,
     isConnected,
     data,
     millisecondsSpent,

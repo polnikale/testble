@@ -26,12 +26,14 @@ import useBle from './src/hooks/useBle';
 const App = () => {
   const {
     devices,
-    currentDevice,
+    device,
     data,
     isStarted,
     uniqueField,
     millisecondsSpent,
     connectDevice,
+    changeStarted,
+    changeUniqueField,
     disconnectDevice,
   } = useBle({started: false, weight: 70});
   const isDarkMode = useColorScheme() === 'dark';
@@ -46,18 +48,13 @@ const App = () => {
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         style={backgroundStyle}>
-        {devices.map((device) => (
+        {devices.map((dev) => (
           <TouchableOpacity
             onPress={() =>
-              currentDevice.current.device?.id === device.id
-                ? connectDevice(device)
-                : disconnectDevice()
+              device?.id === dev.id ? connectDevice(dev) : disconnectDevice()
             }>
             <Text style={{color: 'red', fontSize: 30}}>
-              {device.name} -{' '}
-              {device.id === currentDevice?.current.device?.id
-                ? 'Connected'
-                : 'Not'}
+              {dev.name} - {dev.id === device?.id ? 'Connected' : 'Not'}
             </Text>
           </TouchableOpacity>
         ))}
@@ -86,7 +83,7 @@ const App = () => {
                   value={'' + (field.value || 1)}
                   style={{backgroundColor: 'green', padding: 16}}
                   onChangeText={(value) =>
-                    currentDevice.current.changeUniqueField(field.type, +value)
+                    changeUniqueField(field.type, +value)
                   }
                 />
               </>
@@ -99,13 +96,10 @@ const App = () => {
         <Switch
           style={{marginBottom: 100, marginLeft: 4}}
           value={isStarted}
-          onValueChange={currentDevice.current.changeStarted}
+          onValueChange={changeStarted}
         />
 
-        <Button
-          title="Disconnect"
-          onPress={() => currentDevice.current.disconnect()}
-        />
+        <Button title="Disconnect" onPress={disconnectDevice} />
       </ScrollView>
     </SafeAreaView>
   );
