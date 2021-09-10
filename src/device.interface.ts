@@ -1,3 +1,14 @@
+import {Device} from 'react-native-ble-plx';
+
+export enum DeviceType {
+  XBike = 'X_BIKE',
+  Crosstrainer = 'CROSSTRAINER',
+  Treadmill = 'TREADMILL',
+  Stepper = 'STEPPER',
+  Mbike = 'MBIKE',
+  Rower = 'ROWER',
+}
+
 export enum DeviceUniqueFieldType {
   RESISTANCE = 'RESISTANCE',
   INCLINE = 'INCLINE',
@@ -12,22 +23,31 @@ export enum DeviceFieldType {
   CALORIES = 'CALORIES',
 }
 
-export enum DeviceType {
-  THREADMILL = 'THREADMILL',
-  XBIKE = 'XBIKE',
-}
+export const CARDIOFIT_DEVICES_BY_BYTE: Record<number, DeviceType> = {
+  [0x64]: DeviceType.Treadmill,
+  [0x78]: DeviceType.XBike,
+  [0x8c]: DeviceType.Crosstrainer,
+  [0xa0]: DeviceType.Stepper,
+  [0x96]: DeviceType.Mbike,
+  [0x52]: DeviceType.Rower,
+};
+
+// merge of different devices in future
+export const DEVICES_BY_BYTE = CARDIOFIT_DEVICES_BY_BYTE;
 
 export enum CharacteristicType {
   WORKOUT = 0x20,
-  WEIGHT = 0x40,
+  INFO = 0x40,
 }
+export type LOCAL_ID = string;
 
 export interface BackendDevice {
-  id: string;
-  characteristicId: string;
   uniqueFields: UniqueDeviceField[];
   type: DeviceType;
   hasHeartRate?: boolean;
+}
+export interface LocalDevice {
+  localId: LOCAL_ID;
 }
 
 export type DeviceFields = DeviceField<DeviceFieldType>[];
@@ -56,6 +76,7 @@ export type DeviceField<T extends DeviceFieldType | DeviceUniqueFieldType> = {
   value?: number;
   isDecimal?: boolean;
   get: Position;
+  fixed?: number;
 };
 
 export type AuxiliaryDeviceField = DeviceField<DeviceFieldType>;
@@ -68,7 +89,8 @@ export type UniqueDeviceField = DeviceField<DeviceUniqueFieldType> & {
 export type OnConnectionChange = (isConnected: boolean) => void;
 export type OnStartedChange = (isStarted: boolean) => void;
 export type OnDataChange = (data: DeviceFields) => void;
-export type OnDeviceChoose = (device: BackendDevice) => void;
+export type OnDeviceChoose = (device: BackendDevice, bleDevice: Device) => void;
+export type OnDeviceFind = (localId: LOCAL_ID, deviceType: DeviceType) => void;
 export type OnUniqueFieldChange = (
   type: DeviceUniqueFieldType,
   value: number,

@@ -5,7 +5,7 @@ import {
   DeviceFieldType,
   DeviceUniqueFieldType,
   Position,
-} from '../device.interface';
+} from './device.interface';
 import {ByteNumber} from './mappers';
 
 export const getNewValue = (
@@ -59,18 +59,24 @@ export const getUpdatedFields = <
 ) =>
   pipe(
     fields,
-    R.map((field) =>
-      R.assoc(
-        'value',
+    R.map((field) => {
+      const newValue =
         getNewValue(
           characteristicArray,
           field.get,
           restoredValues[field.type] ?? 0,
           field.isDecimal,
-        ) ?? field.value,
+        ) ?? field.value;
+
+      return R.assoc(
+        'value',
+        newValue && field.fixed
+          ? Math.floor(newValue * Math.pow(10, field.fixed)) /
+              Math.pow(10, field.fixed)
+          : newValue,
         field,
-      ),
-    ),
+      );
+    }),
   );
 
 export const updateField =
@@ -83,14 +89,3 @@ export const updateField =
   ) =>
   (field: Field) =>
     R.assoc('value', field.type === type ? value : field.value, field);
-
-// export const isResponseError = (characteristicArray: Uint8Array) =>
-//   pipe(
-//     characteristicArray,
-//     (array) => array[0] ?? 0,
-//     ByteNumber.to2StringReversed,
-//     (bytes) =>
-//       bytes.length > 3
-//         ? pipe(bytes, R.slice(0, 4), R.map(Number), R.any(R.equals(1)))
-//         : false,
-//   );

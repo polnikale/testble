@@ -12,18 +12,24 @@ import {
   BackendDevice,
   CharacteristicType,
   DeviceFieldType,
+  DEVICES_BY_BYTE,
   DeviceUniqueFieldType,
+  LocalDevice,
+  LOCAL_ID,
   OnConnectionChange,
   OnDataChange,
   OnDeviceChoose,
+  OnDeviceFind,
   OnDisconnect,
   OnStartedChange,
   OnUniqueFieldChange,
   UniqueDeviceField,
 } from './device.interface';
 import deviceFields from './deviceFields';
-import {getUpdatedFields, updateField} from './utils/field';
-import {ByteNumber, toLbs} from './utils/mappers';
+import {getUpdatedFields, updateField} from './field';
+import {ByteNumber, toLbs} from './mappers';
+
+export const AVAILABLE_NAME = 'Cardiofit';
 
 export default class SPDevice {
   public device?: Device;
@@ -34,7 +40,10 @@ export default class SPDevice {
   private dataInterval?: number;
 
   private backendDevice?: BackendDevice;
-  private availableBackendDevices: BackendDevice[];
+  private availableBackendDevices: Record<
+    LOCAL_ID,
+    BackendDevice & LocalDevice
+  >;
 
   private uniqueFields?: UniqueDeviceField[];
   private deviceFields = deviceFields;
@@ -44,6 +53,7 @@ export default class SPDevice {
   > = {};
 
   private NOTIIFCATION_INTERVAL = 1000;
+  private AVAILABLE_SERVICE_ID = '0000fff1-0000-1000-8000-00805f9b34fb';
 
   public onConnectionChange: OnConnectionChange;
   public onDataChange: OnDataChange;
@@ -51,6 +61,7 @@ export default class SPDevice {
   public onUniqueFieldChangeRequest: OnUniqueFieldChange;
   public onStartedChange: OnStartedChange;
   public onDeviceChoose: OnDeviceChoose;
+  public onDeviceFind: OnDeviceFind;
   public onDisconnect: OnDisconnect;
 
   public isStarted: boolean;
@@ -58,26 +69,42 @@ export default class SPDevice {
 
   private weight?: number;
 
-  constructor(
-    onConnectionChange: OnConnectionChange,
-    onDataChange: OnDataChange,
-    onUniqueFieldChange: OnUniqueFieldChange,
-    onUniqueFieldChangeRequest: OnUniqueFieldChange,
-    onStartedChange: OnStartedChange,
-    onDeviceChoose: OnDeviceChoose,
-    onDisconnect: OnDisconnect,
-    availableDevices: BackendDevice[],
-    isStarted: boolean = false,
-    weight?: number,
-  ) {
+  constructor({
+    onConnectionChange,
+    onDataChange,
+    onUniqueFieldChange,
+    onUniqueFieldChangeRequest,
+    onStartedChange,
+    onDeviceChoose,
+    onDeviceFind,
+    onDisconnect,
+    availableDevices,
+    isStarted = false,
+    weight,
+  }: {
+    onConnectionChange: OnConnectionChange;
+    onDataChange: OnDataChange;
+    onUniqueFieldChange: OnUniqueFieldChange;
+    onUniqueFieldChangeRequest: OnUniqueFieldChange;
+    onStartedChange: OnStartedChange;
+    onDeviceChoose: OnDeviceChoose;
+    onDeviceFind: OnDeviceFind;
+    onDisconnect: OnDisconnect;
+    availableDevices: Record<LOCAL_ID, BackendDevice & LocalDevice>;
+    isStarted?: boolean;
+    weight?: number;
+  }) {
     this.availableBackendDevices = availableDevices;
+
     this.onConnectionChange = onConnectionChange;
     this.onDataChange = onDataChange;
     this.onUniqueFieldChange = onUniqueFieldChange;
     this.onUniqueFieldChangeRequest = onUniqueFieldChangeRequest;
     this.onStartedChange = onStartedChange;
     this.onDeviceChoose = onDeviceChoose;
+    this.onDeviceFind = onDeviceFind;
     this.onDisconnect = onDisconnect;
+
     this.isStarted = isStarted;
     this.weight = weight;
   }
@@ -101,11 +128,6 @@ export default class SPDevice {
 
       this.characteristicListener = this.characteristic?.monitor(
         this.handleMonitor.bind(this),
-      );
-      console.log(
-        'characteri',
-        this.characteristic?.id,
-        this.characteristicListener,
       );
     } catch (error) {
       console.error('Connection failed', error);
@@ -148,7 +170,7 @@ export default class SPDevice {
     this.weight = weight;
 
     this.sendData([
-      CharacteristicType.WEIGHT,
+      CharacteristicType.INFO,
       ...ByteNumber.toBytes(toLbs(weight)),
       weight,
     ]);
@@ -175,9 +197,24 @@ export default class SPDevice {
     this.onUniqueFieldChange(type, value);
   };
 
-  public setAvailableDevices(availableDevices: BackendDevice[]) {
+  public setAvailableDevices(
+    availableDevices: Record<LOCAL_ID, BackendDevice & LocalDevice>,
+  ) {
     this.availableBackendDevices = availableDevices;
+
+    this.upateBackendDevice();
   }
+
+  private upateBackendDevice = () => {
+    if (!this.backendDevice && this.device) {
+      const backendDevice = this.availableBackendDevices[this.device.id];
+      if (backendDevice) {
+        this.backendDevice = backendDevice;
+        this.uniqueFields = Array.from(this.backendDevice.uniqueFields);
+        this.onDeviceChoose(backendDevice, this.device);
+      }
+    }
+  };
 
   private setupDevice = async (device: Device) => {
     try {
@@ -185,23 +222,15 @@ export default class SPDevice {
         // if ids match - we need to disconnect the devices
         await this.disconnect();
       }
-      const backendDevice = this.availableBackendDevices.find(
-        R.propEq('id', device.id),
-      );
-
-      if (!backendDevice) {
-        throw new Error(`Device not found: ${device.id}`);
-      }
 
       this.device = device;
-      this.uniqueFields = Array.from(backendDevice.uniqueFields);
-      this.backendDevice = backendDevice;
+
+      this.upateBackendDevice();
 
       await this.device.connect();
       await this.device.requestConnectionPriority(ConnectionPriority.High);
 
       await this.device.discoverAllServicesAndCharacteristics();
-      this.onDeviceChoose(backendDevice);
 
       const services = await this.device.services();
 
@@ -210,7 +239,7 @@ export default class SPDevice {
       );
 
       this.characteristic = pipe(characteristics, R.flatten, (arr) =>
-        arr.find(R.propEq('uuid', this.backendDevice?.characteristicId)),
+        arr.find(R.propEq('uuid', this.AVAILABLE_SERVICE_ID)),
       );
     } catch (error) {
       console.error(`Setup failed ${error}`);
@@ -295,8 +324,29 @@ export default class SPDevice {
 
     const characteristicArray = base64.toByteArray(characteristic.value);
 
+    this.processInfo(characteristicArray);
+    this.processData(characteristicArray);
+  };
+
+  private processInfo = (characteristicArray: Uint8Array) => {
+    if (characteristicArray[0] !== CharacteristicType.INFO) {
+      return;
+    }
+    const deviceType = DEVICES_BY_BYTE[characteristicArray[2]];
+
+    // if we have the backend device - it means we already understand what type of device it is. It means we're goodboys
+    // in the other case - we need to take a look at the 1st field, find the device and add it.
+    if (this.backendDevice || !this.device) {
+      return;
+    }
+
+    if (deviceType) {
+      this.onDeviceFind(this.device.id, deviceType);
+    }
+  };
+
+  private processData = (characteristicArray: Uint8Array) => {
     if (characteristicArray.length <= 10) {
-      console.error('Error notification');
       return;
     }
 

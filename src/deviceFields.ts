@@ -19,9 +19,8 @@ export default [
     type: DeviceFieldType.DISTANCE,
     get: {
       lowByte: 5,
-      lowByteMultiplier: 10,
+      lowByteMultiplier: 0.01,
       highByte: 4,
-      highByteMultiplier: 1000,
       byte: [
         {
           index: 1,
@@ -31,6 +30,7 @@ export default [
       accumulative: true,
     },
     value: 0,
+    fixed: 2,
   },
   {
     type: DeviceFieldType.CALORIES,
@@ -72,24 +72,4 @@ export default [
     },
     value: 0,
   },
-  // {
-  //   type: DeviceFieldType.WATT,
-  //   get: {
-  //     lowByte: 9,
-  //     highByte: 8,
-  //     highByteMultiplier: 100,
-  //     byte: [
-  //       {
-  //         index: 1,
-  //         value: [
-  //           {
-  //             index: 6,
-  //             value: 1,
-  //           },
-  //         ],
-  //       },
-  //     ],
-  //   },
-  //   value: 0,
-  // },
 ] as AuxiliaryDeviceField[];
