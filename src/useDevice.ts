@@ -137,6 +137,25 @@ const DEVICES_MOCK: BackendDevice[] = [
   },
 ];
 
+const useLocalDevice = () => {
+  const [localDevices, setLocalDevices] = useState({});
+
+  const onLocalDeviceAdd = useCallback(
+    (localId, device) => {
+      setLocalDevices((localDevices) => ({
+        ...localDevices,
+        [localId]: {
+          ...device,
+          localId,
+        },
+      }));
+    },
+    [setLocalDevices],
+  );
+
+  return {localDevices, onLocalDeviceAdd};
+};
+
 const useDevice = (
   manager: BleManager,
   {started, weight, onUniqueFieldChangeRequest = () => {}}: DeviceDefaults,
@@ -149,7 +168,7 @@ const useDevice = (
   const [device, setDevice] = useState<BackendDevice>();
   const [bleDevice, setBleDevice] = useState<Device>();
 
-  const {localDevices, onLocalDeviceAdd} = useLocalDeviceContext();
+  const {localDevices, onLocalDeviceAdd} = useLocalDevice();
 
   const restoreDate = useRef<Date>();
   const [millisecondsSpent, setMillisecondsSpent] = useState(0);
